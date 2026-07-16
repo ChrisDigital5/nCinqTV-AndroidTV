@@ -1,0 +1,14 @@
+name = "ncinqtv-android"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+[vars]
+GITHUB_REPO = "ChrisDigital5/nCinqTV-AndroidTV"
+
+[[routes]]
+pattern = "tv.ncinq.app/dl*"
+zone_name = "ncinq.app"
+
+[[routes]]
+pattern = "tv.ncinq.app/api/android/*"
+zone_name = "ncinq.app"

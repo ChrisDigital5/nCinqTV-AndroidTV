@@ -1,0 +1,3 @@
+-keepattributes Signature,*Annotation*
+-keep class app.ncinq.tv.data.** { *; }
+-keep class com.google.gson.reflect.TypeToken { *; }

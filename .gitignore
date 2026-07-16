@@ -1,0 +1,12 @@
+.gradle/
+.idea/
+build/
+**/build/
+local.properties
+keystore/*.jks
+keystore/*.keystore
+*.apk
+*.aab
+backend/node_modules/
+backend/.wrangler/
+.DS_Store
