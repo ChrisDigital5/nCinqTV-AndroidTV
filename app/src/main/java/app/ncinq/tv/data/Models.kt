@@ -28,16 +28,35 @@ data class MediaRow(
 data class HomeFeed(
     val featured: MediaItem? = null,
     val rows: List<MediaRow> = emptyList(),
+    val networks: List<NetworkItem> = emptyList(),
 )
+
+data class NetworkItem(
+    val id: Int = 0,
+    val name: String = "",
+    val logoUrl: String? = null,
+)
+
+data class GenreOption(val id: Int = 0, val name: String = "")
 
 data class CatalogPage(
     val page: Int = 1,
     val totalPages: Int = 1,
     val items: List<MediaItem> = emptyList(),
+    val genres: List<GenreOption> = emptyList(),
 )
 
 data class SearchResults(
+    val page: Int = 1,
+    val totalPages: Int = 1,
     val items: List<MediaItem> = emptyList(),
+)
+
+data class CastMember(
+    val id: Int = 0,
+    val name: String = "",
+    val character: String = "",
+    val profileUrl: String? = null,
 )
 
 data class SeasonSummary(
@@ -59,7 +78,16 @@ data class MediaDetails(
     val year: Int? = null,
     val imdbId: String? = null,
     val runtimeMinutes: Int? = null,
+    val tagline: String = "",
+    val status: String = "",
+    val contentRating: String? = null,
+    val originalLanguage: String? = null,
+    val countries: List<String> = emptyList(),
     val genres: List<String> = emptyList(),
+    val networks: List<NetworkItem> = emptyList(),
+    val creators: List<String> = emptyList(),
+    val cast: List<CastMember> = emptyList(),
+    val recommendations: List<MediaItem> = emptyList(),
     val seasonCount: Int = 0,
     val seasons: List<SeasonSummary> = emptyList(),
 )
@@ -173,6 +201,13 @@ data class UpdateInfo(
     val releaseNotes: String = "",
     val publishedAt: String? = null,
     val downloadUrl: String = "",
+)
+
+data class UpdateInstallState(
+    val active: Boolean = false,
+    val progress: Int = 0,
+    val message: String = "",
+    val readyToInstall: Boolean = false,
 )
 
 sealed interface LoadState<out T> {

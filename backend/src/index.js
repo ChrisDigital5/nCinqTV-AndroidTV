@@ -38,6 +38,35 @@ function normalizeMedia(item, fallbackType) {
   };
 }
 
+const NETWORK_PROVIDER_IDS = {
+  213: 8,
+  1024: 9,
+  453: 15,
+  2739: 337,
+  2552: 350,
+  49: 384,
+  4330: 531,
+  3353: 386,
+};
+
+const GENRES = {
+  movie: [
+    { id: 28, name: 'Action' }, { id: 12, name: 'Adventure' },
+    { id: 16, name: 'Animation' }, { id: 35, name: 'Comedy' },
+    { id: 80, name: 'Crime' }, { id: 99, name: 'Documentary' },
+    { id: 18, name: 'Drama' }, { id: 14, name: 'Fantasy' },
+    { id: 27, name: 'Horror' }, { id: 878, name: 'Sci-Fi' },
+    { id: 53, name: 'Thriller' },
+  ],
+  tv: [
+    { id: 10759, name: 'Action & Adventure' }, { id: 16, name: 'Animation' },
+    { id: 35, name: 'Comedy' }, { id: 80, name: 'Crime' },
+    { id: 99, name: 'Documentary' }, { id: 18, name: 'Drama' },
+    { id: 10751, name: 'Family' }, { id: 9648, name: 'Mystery' },
+    { id: 10765, name: 'Sci-Fi & Fantasy' },
+  ],
+};
+
 async function tmdb(path, env, searchParams = {}, fetchFn = fetch) {
   if (!env.TMDB_API_KEY) throw new Error('TMDB_API_KEY is not configured');
   const url = new URL(`${TMDB_BASE_URL}${path}`);
@@ -74,6 +103,14 @@ async function homeFeed(env, fetchFn) {
   return {
     featured: rows[0]?.items.find(item => item.backdropUrl) || rows[0]?.items[0] || null,
     rows,
+    networks: [
+      { id: 213, name: 'Netflix', logoUrl: imageUrl('/wwemzKWzjKYJFfCeiB57q3r4Bcm.png', 'w500') },
+      { id: 1024, name: 'Prime Video', logoUrl: imageUrl('/w7HfLNm9CWwRmAMU58udl2L7We7.png', 'w500') },
+      { id: 453, name: 'Hulu', logoUrl: imageUrl('/pqUTCleNUiTLAVlelGxUgWn1ELh.png', 'w500') },
+      { id: 2739, name: 'Disney+', logoUrl: imageUrl('/1edZOYAfoyZyZ3rklNSiUpXX30Q.png', 'w500') },
+      { id: 2552, name: 'Apple TV+', logoUrl: imageUrl('/bngHRFi794mnMq34gfVcm9nDxN1.png', 'w500') },
+      { id: 49, name: 'HBO', logoUrl: imageUrl('/tuomPhY2UtuPTqqFnKMVHvSb724.png', 'w500') },
+    ],
   };
 }
 
@@ -85,37 +122,87 @@ async function catalog(type, url, env, fetchFn) {
     : new Set(['popular', 'top_rated', 'airing_today', 'on_the_air']);
   const category = allowedCategories.has(requestedCategory) ? requestedCategory : 'popular';
   const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-  const payload = await tmdb(`/${type}/${category}`, env, { page }, fetchFn);
+  const genre = url.searchParams.get('genre') || '';
+  const network = url.searchParams.get('network') || '';
+  const sortBy = url.searchParams.get('sort') || '';
+  const year = url.searchParams.get('year') || '';
+  const useDiscover = Boolean(genre || network || sortBy || year);
+  const params = { page };
+  if (useDiscover) {
+    params.sort_by = sortBy || 'popularity.desc';
+    if (genre) params.with_genres = genre;
+    if (year) params[type === 'movie' ? 'primary_release_year' : 'first_air_date_year'] = year;
+    if (network) {
+      if (type === 'tv') params.with_networks = network;
+      else if (NETWORK_PROVIDER_IDS[network]) {
+        params.with_watch_providers = NETWORK_PROVIDER_IDS[network];
+        params.watch_region = 'US';
+      }
+    }
+  }
+  const payload = await tmdb(useDiscover ? `/discover/${type}` : `/${type}/${category}`, env, params, fetchFn);
   return json({
     page: payload.page || page,
     totalPages: payload.total_pages || 1,
     items: (payload.results || []).map(item => normalizeMedia(item, type)),
+    genres: GENRES[type],
   }, 200, { 'cache-control': 'public, max-age=300' });
 }
 
 async function search(url, env, fetchFn) {
   const query = (url.searchParams.get('q') || '').trim();
   if (query.length < 2) return json({ items: [] });
-  const payload = await tmdb('/search/multi', env, {
+  const requestedType = url.searchParams.get('type');
+  const type = requestedType === 'movie' || requestedType === 'tv' ? requestedType : null;
+  const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+  const payload = await tmdb(type ? `/search/${type}` : '/search/multi', env, {
     query,
     include_adult: false,
-    page: Math.max(1, Number(url.searchParams.get('page') || 1)),
+    page,
   }, fetchFn);
   const items = (payload.results || [])
-    .filter(item => item.media_type === 'movie' || item.media_type === 'tv')
-    .map(item => normalizeMedia(item, item.media_type));
-  return json({ items });
+    .filter(item => type || item.media_type === 'movie' || item.media_type === 'tv')
+    .map(item => normalizeMedia(item, type || item.media_type));
+  return json({ page: payload.page || page, totalPages: payload.total_pages || 1, items });
 }
 
 async function details(type, id, env, fetchFn) {
   if (type !== 'movie' && type !== 'tv') return json({ error: 'Invalid media type' }, 400);
-  const payload = await tmdb(`/${type}/${id}`, env, { append_to_response: 'external_ids' }, fetchFn);
+  const payload = await tmdb(`/${type}/${id}`, env, {
+    append_to_response: type === 'tv'
+      ? 'external_ids,credits,recommendations,content_ratings'
+      : 'external_ids,credits,recommendations,release_dates',
+  }, fetchFn);
   const media = normalizeMedia(payload, type);
+  const certification = type === 'tv'
+    ? payload.content_ratings?.results?.find(item => item.iso_3166_1 === 'US')?.rating
+    : payload.release_dates?.results?.find(item => item.iso_3166_1 === 'US')?.release_dates
+      ?.find(item => item.certification)?.certification;
   return json({
     ...media,
     imdbId: payload.external_ids?.imdb_id || payload.imdb_id || null,
     runtimeMinutes: payload.runtime || payload.episode_run_time?.[0] || null,
+    tagline: payload.tagline || '',
+    status: payload.status || '',
+    contentRating: certification || null,
+    originalLanguage: payload.original_language || null,
+    countries: (payload.production_countries || payload.origin_country || []).map(country => country.name || country),
     genres: (payload.genres || []).map(genre => genre.name),
+    networks: (payload.networks || []).map(network => ({
+      id: network.id,
+      name: network.name,
+      logoUrl: imageUrl(network.logo_path, 'w185'),
+    })),
+    creators: (payload.created_by || payload.credits?.crew?.filter(person => person.job === 'Director') || [])
+      .slice(0, 4).map(person => person.name),
+    cast: (payload.credits?.cast || []).slice(0, 10).map(person => ({
+      id: person.id,
+      name: person.name,
+      character: person.character || '',
+      profileUrl: imageUrl(person.profile_path, 'w185'),
+    })),
+    recommendations: (payload.recommendations?.results || []).slice(0, 16)
+      .map(item => normalizeMedia(item, type)),
     seasonCount: payload.number_of_seasons || 0,
     seasons: (payload.seasons || [])
       .filter(season => season.season_number > 0)

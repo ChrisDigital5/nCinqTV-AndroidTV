@@ -16,6 +16,7 @@ import app.ncinq.tv.data.StreamResult
 import app.ncinq.tv.data.TrackedItem
 import app.ncinq.tv.data.TrackerRepository
 import app.ncinq.tv.data.UpdateInfo
+import app.ncinq.tv.data.UpdateInstallState
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -40,6 +41,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _search = MutableStateFlow<LoadState<SearchResults>>(LoadState.Ready(SearchResults()))
     val search: StateFlow<LoadState<SearchResults>> = _search.asStateFlow()
 
+    private val _catalogLoadingMore = MutableStateFlow(false)
+    val catalogLoadingMore: StateFlow<Boolean> = _catalogLoadingMore.asStateFlow()
+
+    private val _searchLoadingMore = MutableStateFlow(false)
+    val searchLoadingMore: StateFlow<Boolean> = _searchLoadingMore.asStateFlow()
+
     private val _details = MutableStateFlow<LoadState<MediaDetails>>(LoadState.Loading)
     val details: StateFlow<LoadState<MediaDetails>> = _details.asStateFlow()
 
@@ -57,11 +64,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val currentVersionName: String = BuildConfig.VERSION_NAME
 
+    private val _updateInstallState = MutableStateFlow(UpdateInstallState())
+    val updateInstallState: StateFlow<UpdateInstallState> = _updateInstallState.asStateFlow()
+
+
     val trackedItems = trackerRepository.items
 
     private val streamCache = ConcurrentHashMap<String, StreamResult>()
     private val pendingStreams = mutableMapOf<String, Deferred<StreamResult>>()
     private val pendingMutex = Mutex()
+    private var catalogQuery = CatalogQuery(MediaType.MOVIE)
+    private var searchQuery = ""
+    private var searchType: MediaType? = null
 
     init {
         loadHome()
@@ -76,22 +90,63 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadCatalog(type: MediaType, category: String = "popular") {
+    fun loadCatalog(
+        type: MediaType,
+        category: String = "popular",
+        genre: Int? = null,
+        network: Int? = null,
+        sort: String? = null,
+        year: Int? = null,
+    ) {
+        catalogQuery = CatalogQuery(type, category, genre, network, sort, year)
         viewModelScope.launch {
             _catalog.value = LoadState.Loading
-            _catalog.value = runLoad { catalogRepository.catalog(type, category) }
+            _catalog.value = runLoad { catalogRepository.catalog(type, category, 1, genre, network, sort, year) }
         }
     }
 
-    fun search(query: String) {
+    fun loadMoreCatalog() {
+        val current = (_catalog.value as? LoadState.Ready)?.value ?: return
+        if (_catalogLoadingMore.value || current.page >= current.totalPages) return
+        viewModelScope.launch {
+            _catalogLoadingMore.value = true
+            val query = catalogQuery
+            runCatching {
+                catalogRepository.catalog(
+                    query.type, query.category, current.page + 1,
+                    query.genre, query.network, query.sort, query.year,
+                )
+            }.onSuccess { next ->
+                _catalog.value = LoadState.Ready(next.copy(items = (current.items + next.items).distinctBy { it.type to it.id }))
+            }
+            _catalogLoadingMore.value = false
+        }
+    }
+
+    fun search(query: String, type: MediaType? = null) {
         val normalized = query.trim()
         if (normalized.length < 2) {
             _search.value = LoadState.Ready(SearchResults())
             return
         }
+        searchQuery = normalized
+        searchType = type
         viewModelScope.launch {
             _search.value = LoadState.Loading
-            _search.value = runLoad { catalogRepository.search(normalized) }
+            _search.value = runLoad { catalogRepository.search(normalized, type, 1) }
+        }
+    }
+
+    fun loadMoreSearch() {
+        val current = (_search.value as? LoadState.Ready)?.value ?: return
+        if (_searchLoadingMore.value || current.page >= current.totalPages || searchQuery.isBlank()) return
+        viewModelScope.launch {
+            _searchLoadingMore.value = true
+            runCatching { catalogRepository.search(searchQuery, searchType, current.page + 1) }
+                .onSuccess { next ->
+                    _search.value = LoadState.Ready(next.copy(items = (current.items + next.items).distinctBy { it.type to it.id }))
+                }
+            _searchLoadingMore.value = false
         }
     }
 
@@ -161,7 +216,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resumePosition(request: PlaybackRequest): Long {
         return trackedItems.value
-            .firstOrNull { it.mediaId == request.mediaId && it.mediaType == request.mediaType }
+            .firstOrNull {
+                it.mediaId == request.mediaId && it.mediaType == request.mediaType &&
+                    (request.mediaType == MediaType.MOVIE || (it.season == request.season && it.episode == request.episode))
+            }
             ?.positionMs
             ?: 0L
     }
@@ -215,6 +273,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return null
     }
 
+    suspend fun previousPlayback(current: PlaybackRequest): PlaybackRequest? {
+        if (current.mediaType != MediaType.TV) return null
+        val details = runCatching { catalogRepository.details(MediaType.TV, current.mediaId) }.getOrNull()
+        val currentSeason = current.season ?: 1
+        val currentEpisode = current.episode ?: 1
+        for (seasonNumber in currentSeason downTo 1) {
+            val season = runCatching { catalogRepository.season(current.mediaId, seasonNumber) }.getOrNull() ?: continue
+            val previous = season.episodes.lastOrNull { episode ->
+                seasonNumber < currentSeason || episode.number < currentEpisode
+            } ?: continue
+            return current.copy(
+                imdbId = current.imdbId ?: details?.imdbId,
+                releaseYear = current.releaseYear ?: details?.year,
+                season = seasonNumber,
+                episode = previous.number,
+                episodeTitle = previous.name,
+                backdropUrl = previous.stillUrl ?: current.backdropUrl,
+                episodeCount = season.episodes.size,
+                seasonCount = current.seasonCount.takeIf { it > 0 } ?: details?.seasonCount ?: currentSeason,
+            )
+        }
+        return null
+    }
+
     fun prefetchNext(current: PlaybackRequest) {
         viewModelScope.launch {
             val next = nextPlayback(current) ?: return@launch
@@ -243,6 +325,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissUpdate() {
         _update.value = null
     }
+
+    fun setUpdateInstallState(state: UpdateInstallState) {
+        _updateInstallState.value = state
+    }
+
 
     fun checkForUpdates() {
         checkForUpdate(manual = true)
@@ -273,4 +360,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             LoadState.Failed(error.message ?: "Something went wrong. Please try again.")
         }
     }
+
+    private data class CatalogQuery(
+        val type: MediaType,
+        val category: String = "popular",
+        val genre: Int? = null,
+        val network: Int? = null,
+        val sort: String? = null,
+        val year: Int? = null,
+    )
 }

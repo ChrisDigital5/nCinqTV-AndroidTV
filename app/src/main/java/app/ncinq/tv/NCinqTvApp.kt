@@ -54,6 +54,7 @@ import androidx.tv.material3.Text
 import app.ncinq.tv.data.MediaItem
 import app.ncinq.tv.data.MediaType
 import app.ncinq.tv.data.UpdateInfo
+import app.ncinq.tv.data.UpdateInstallState
 import app.ncinq.tv.player.PlayerScreen
 import app.ncinq.tv.ui.AppBackground
 import app.ncinq.tv.ui.Brand
@@ -91,6 +92,7 @@ fun NCinqTvApp(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
     val update by viewModel.update.collectAsState()
+    val installState by viewModel.updateInstallState.collectAsState()
 
     Box(Modifier.fillMaxSize().background(AppBackground)) {
         if (route == Routes.PLAYER) {
@@ -105,10 +107,10 @@ fun NCinqTvApp(
         update?.let { info ->
             UpdateDialog(
                 info = info,
+                installState = installState,
                 onLater = viewModel::dismissUpdate,
                 onUpdate = {
                     onInstallUpdate(info)
-                    viewModel.dismissUpdate()
                 },
             )
         }
@@ -123,7 +125,11 @@ private fun AppNavHost(navController: NavHostController, viewModel: AppViewModel
         modifier = Modifier.fillMaxSize(),
     ) {
         composable(Routes.HOME) {
-            HomeScreen(viewModel, onOpen = { navController.openDetails(it) })
+            HomeScreen(
+                viewModel,
+                onOpen = { navController.openDetails(it) },
+                onNetwork = { navController.navigate("network/${it.id}") },
+            )
         }
         composable(Routes.MOVIES) {
             CatalogScreen(viewModel, MediaType.MOVIE, onOpen = { navController.openDetails(it) })
@@ -151,7 +157,12 @@ private fun AppNavHost(navController: NavHostController, viewModel: AppViewModel
                 mediaType = type,
                 mediaId = id,
                 onPlay = { navController.navigate(Routes.PLAYER) },
+                onOpenRelated = { navController.openDetails(it) },
             )
+        }
+        composable("network/{id}") { entry ->
+            val networkId = entry.arguments?.getString("id")?.toIntOrNull() ?: return@composable
+            CatalogScreen(viewModel, MediaType.TV, onOpen = { navController.openDetails(it) }, initialNetwork = networkId)
         }
     }
 }
@@ -189,7 +200,7 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
             Image(
                 painter = painterResource(R.drawable.app_icon),
                 contentDescription = "nCinqTV",
-                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)),
+                modifier = Modifier.size(width = 54.dp, height = 34.dp).clip(RoundedCornerShape(5.dp)),
             )
             if (expanded) {
                 Text(
@@ -276,7 +287,7 @@ private fun RailItem(
 }
 
 @Composable
-private fun UpdateDialog(info: UpdateInfo, onLater: () -> Unit, onUpdate: () -> Unit) {
+private fun UpdateDialog(info: UpdateInfo, installState: UpdateInstallState, onLater: () -> Unit, onUpdate: () -> Unit) {
     Dialog(onDismissRequest = onLater) {
         Column(
             modifier = Modifier.width(570.dp).clip(RoundedCornerShape(8.dp)).background(Panel).padding(28.dp),
@@ -289,9 +300,19 @@ private fun UpdateDialog(info: UpdateInfo, onLater: () -> Unit, onUpdate: () -> 
                 fontSize = 14.sp,
                 maxLines = 7,
             )
-            Text("Android will ask you to confirm installation.", color = BrandBright, fontSize = 13.sp)
+            Text(
+                if (installState.active) installState.message else "Android will ask you to confirm installation.",
+                color = BrandBright,
+                fontSize = 13.sp,
+            )
+            if (installState.active) {
+                Box(Modifier.fillMaxWidth().height(7.dp).background(Color.White.copy(alpha = 0.15f))) {
+                    Box(Modifier.fillMaxWidth(installState.progress / 100f).height(7.dp).background(BrandBright))
+                }
+                Text("${installState.progress}%", color = TextSecondary, fontSize = 12.sp)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FocusButton("Download update", onUpdate, selected = true)
+                FocusButton(if (installState.active) "Downloading" else "Download update", onUpdate, selected = true, enabled = !installState.active)
                 FocusButton("Later", onLater)
             }
         }

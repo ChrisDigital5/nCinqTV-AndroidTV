@@ -24,6 +24,38 @@ test('normalizes movie and TV metadata for the client', () => {
   });
 });
 
+test('catalog forwards pagination and filters to TMDB discovery', async () => {
+  let requestedUrl;
+  const response = await handleRequest(
+    new Request('https://tv.ncinq.app/api/android/catalog/tv?page=3&genre=18&network=213&sort=vote_average.desc'),
+    env,
+    async url => {
+      requestedUrl = new URL(url);
+      return Response.json({ page: 3, total_pages: 7, results: [] });
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(requestedUrl.pathname, '/3/discover/tv');
+  assert.equal(requestedUrl.searchParams.get('page'), '3');
+  assert.equal(requestedUrl.searchParams.get('with_genres'), '18');
+  assert.equal(requestedUrl.searchParams.get('with_networks'), '213');
+});
+
+test('search preserves exact media type and pagination', async () => {
+  const response = await handleRequest(
+    new Request('https://tv.ncinq.app/api/android/search?q=avatar&type=tv&page=2'),
+    env,
+    async url => {
+      assert.equal(new URL(url).pathname, '/3/search/tv');
+      return Response.json({ page: 2, total_pages: 4, results: [{ id: 82452, name: 'Avatar: The Last Airbender' }] });
+    },
+  );
+  const payload = await response.json();
+  assert.equal(payload.items[0].type, 'tv');
+  assert.equal(payload.items[0].id, 82452);
+  assert.equal(payload.totalPages, 4);
+});
+
 test('maps semantic tags to Android version codes', () => {
   assert.equal(versionCodeFromTag('v1.0.0'), 10000);
   assert.equal(versionCodeFromTag('v1.4.7'), 10407);

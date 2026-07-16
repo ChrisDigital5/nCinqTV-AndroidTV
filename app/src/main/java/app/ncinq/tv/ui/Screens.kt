@@ -67,6 +67,7 @@ import app.ncinq.tv.data.LoadState
 import app.ncinq.tv.data.MediaDetails
 import app.ncinq.tv.data.MediaItem
 import app.ncinq.tv.data.MediaType
+import app.ncinq.tv.data.NetworkItem
 import app.ncinq.tv.data.SeasonDetails
 import app.ncinq.tv.data.TrackedItem
 import app.ncinq.tv.data.TrackingStatus
@@ -75,7 +76,7 @@ import coil3.compose.AsyncImage
 private val ScreenGutter = 36.dp
 
 @Composable
-fun HomeScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
+fun HomeScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit, onNetwork: (NetworkItem) -> Unit) {
     val state by viewModel.home.collectAsState()
     when (val value = state) {
         LoadState.Loading -> LoadingScreen("Loading nCinqTV")
@@ -92,8 +93,32 @@ fun HomeScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
                         FeaturedHero(featured = featured, onOpen = { onOpen(featured) })
                     }
                 }
+                if (feed.networks.isNotEmpty()) {
+                    item(key = "networks") { NetworkShelf(feed.networks, onNetwork) }
+                }
                 items(feed.rows, key = { it.title }) { row ->
                     MediaShelf(row = row, onOpen = onOpen)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NetworkShelf(networks: List<NetworkItem>, onNetwork: (NetworkItem) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Browse by network", color = TextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = ScreenGutter))
+        LazyRow(contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(networks, key = { it.id }) { network ->
+                var focused by remember { mutableStateOf(false) }
+                Box(
+                    Modifier.width(190.dp).height(86.dp).scale(if (focused) 1.05f else 1f)
+                        .clip(RoundedCornerShape(6.dp)).background(Color(0xFF17181D))
+                        .border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color.White.copy(alpha = 0.08f), RoundedCornerShape(6.dp))
+                        .onFocusChanged { focused = it.isFocused }.clickable { onNetwork(network) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AsyncImage(network.logoUrl, network.name, Modifier.width(128.dp).height(54.dp), contentScale = ContentScale.Fit)
                 }
             }
         }
@@ -154,23 +179,71 @@ private fun FeaturedHero(featured: MediaItem, onOpen: () -> Unit) {
 }
 
 @Composable
-fun CatalogScreen(viewModel: AppViewModel, type: MediaType, onOpen: (MediaItem) -> Unit) {
-    LaunchedEffect(type) { viewModel.loadCatalog(type) }
+fun CatalogScreen(
+    viewModel: AppViewModel,
+    type: MediaType,
+    onOpen: (MediaItem) -> Unit,
+    initialNetwork: Int? = null,
+) {
+    var category by remember(type, initialNetwork) { mutableStateOf("popular") }
+    var genre by remember(type, initialNetwork) { mutableStateOf<Int?>(null) }
+    var sort by remember(type, initialNetwork) { mutableStateOf<String?>(null) }
+    LaunchedEffect(type, initialNetwork) { viewModel.loadCatalog(type, network = initialNetwork) }
     val state by viewModel.catalog.collectAsState()
+    val loadingMore by viewModel.catalogLoadingMore.collectAsState()
     when (val value = state) {
         LoadState.Loading -> LoadingScreen("Loading ${if (type == MediaType.MOVIE) "movies" else "shows"}")
-        is LoadState.Failed -> ErrorScreen(value.message) { viewModel.loadCatalog(type) }
+        is LoadState.Failed -> ErrorScreen(value.message) { viewModel.loadCatalog(type, category, genre, initialNetwork, sort) }
         is LoadState.Ready -> Column(Modifier.fillMaxSize().background(AppBackground)) {
             ScreenTitle(if (type == MediaType.MOVIE) "Movies" else "TV Shows")
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                val categories = if (type == MediaType.MOVIE) {
+                    listOf("popular" to "Popular", "top_rated" to "Top rated", "now_playing" to "Now playing", "upcoming" to "Upcoming")
+                } else {
+                    listOf("popular" to "Popular", "top_rated" to "Top rated", "airing_today" to "Airing today", "on_the_air" to "On the air")
+                }
+                items(categories, key = { it.first }) { option ->
+                    FocusButton(option.second, onClick = {
+                        category = option.first; sort = null
+                        viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
+                    }, selected = category == option.first && sort == null)
+                }
+                item {
+                    FocusButton("Newest", onClick = {
+                        sort = if (type == MediaType.MOVIE) "primary_release_date.desc" else "first_air_date.desc"
+                        viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
+                    }, selected = sort != null)
+                }
+            }
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                item {
+                    FocusButton("All genres", onClick = {
+                        genre = null; viewModel.loadCatalog(type, category, null, initialNetwork, sort)
+                    }, selected = genre == null)
+                }
+                items(value.value.genres, key = { it.id }) { option ->
+                    FocusButton(option.name, onClick = {
+                        genre = option.id; viewModel.loadCatalog(type, category, option.id, initialNetwork, sort)
+                    }, selected = genre == option.id)
+                }
+            }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(172.dp),
                 contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(25.dp),
             ) {
-                items(value.value.items, key = { "${it.type}:${it.id}" }) { item ->
+                itemsIndexed(value.value.items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
+                    if (index >= value.value.items.lastIndex - 5) LaunchedEffect(index, value.value.page) { viewModel.loadMoreCatalog() }
                     MediaCard(item = item, onClick = { onOpen(item) })
                 }
+                if (loadingMore) item { CircularProgressIndicator(color = BrandBright, modifier = Modifier.padding(28.dp)) }
             }
         }
     }
@@ -180,12 +253,13 @@ fun CatalogScreen(viewModel: AppViewModel, type: MediaType, onOpen: (MediaItem) 
 fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
     var query by remember { mutableStateOf("") }
     var fieldFocused by remember { mutableStateOf(false) }
+    var mediaType by remember { mutableStateOf<MediaType?>(null) }
     val state by viewModel.search.collectAsState()
     val focusManager = LocalFocusManager.current
     val firstResultFocusRequester = remember { FocusRequester() }
 
     fun submitSearch() {
-        viewModel.search(query)
+        viewModel.search(query, mediaType)
         focusManager.clearFocus()
     }
 
@@ -227,10 +301,18 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
             }
             FocusButton("Search", onClick = ::submitSearch, enabled = query.trim().length >= 2, icon = Icons.Rounded.Search)
         }
+        Row(modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(null to "Everything", MediaType.MOVIE to "Movies", MediaType.TV to "TV Shows").forEach { option ->
+                FocusButton(option.second, onClick = {
+                    mediaType = option.first
+                    if (query.trim().length >= 2) viewModel.search(query, mediaType)
+                }, selected = mediaType == option.first)
+            }
+        }
 
         when (val value = state) {
             LoadState.Loading -> LoadingScreen("Searching", modifier = Modifier.fillMaxWidth().weight(1f))
-            is LoadState.Failed -> ErrorScreen(value.message, modifier = Modifier.fillMaxWidth().weight(1f)) { viewModel.search(query) }
+            is LoadState.Failed -> ErrorScreen(value.message, modifier = Modifier.fillMaxWidth().weight(1f)) { viewModel.search(query, mediaType) }
             is LoadState.Ready -> {
                 if (value.value.items.isEmpty()) {
                     EmptyMessage(
@@ -247,6 +329,7 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
                         itemsIndexed(value.value.items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
+                            if (index >= value.value.items.lastIndex - 5) LaunchedEffect(index, value.value.page) { viewModel.loadMoreSearch() }
                             MediaCard(
                                 item = item,
                                 onClick = { onOpen(item) },
@@ -266,6 +349,7 @@ fun DetailsScreen(
     mediaType: MediaType,
     mediaId: Int,
     onPlay: () -> Unit,
+    onOpenRelated: (MediaItem) -> Unit,
 ) {
     LaunchedEffect(mediaType, mediaId) { viewModel.loadDetails(mediaType, mediaId) }
     val detailsState by viewModel.details.collectAsState()
@@ -289,6 +373,7 @@ fun DetailsScreen(
                 viewModel.playEpisode(value.value, season, episode)
                 onPlay()
             },
+            onOpenRelated = onOpenRelated,
         )
     }
 }
@@ -302,14 +387,17 @@ private fun DetailsContent(
     onSeason: (Int) -> Unit,
     onMoviePlay: () -> Unit,
     onEpisodePlay: (SeasonDetails, Int) -> Unit,
+    onOpenRelated: (MediaItem) -> Unit,
 ) {
+    val actionFocusRequester = remember(details.id, details.type) { FocusRequester() }
+    LaunchedEffect(details.id, details.type) { actionFocusRequester.requestFocus() }
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(AppBackground),
         contentPadding = PaddingValues(bottom = 42.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         item(key = "header") {
-            Box(Modifier.fillMaxWidth().height(400.dp)) {
+            Box(Modifier.fillMaxWidth().height(430.dp)) {
                 AsyncImage(details.backdropUrl, details.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 Box(
                     Modifier.fillMaxSize().background(
@@ -325,13 +413,15 @@ private fun DetailsContent(
                         .background(Brush.verticalGradient(listOf(Color.Transparent, AppBackground))),
                 )
                 Column(
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = ScreenGutter, end = 24.dp).width(650.dp),
+                    modifier = Modifier.align(Alignment.TopStart).padding(start = ScreenGutter, top = 28.dp, end = 24.dp).width(760.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(details.title, color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2)
+                    if (details.tagline.isNotBlank()) Text(details.tagline, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     Text(
                         listOfNotNull(
                             details.year?.toString(),
+                            details.contentRating,
                             details.runtimeMinutes?.let { "$it min" },
                             details.rating.takeIf { it > 0 }?.let { "%.1f rating".format(it) },
                             details.genres.take(3).joinToString(" / ").takeIf(String::isNotBlank),
@@ -343,13 +433,14 @@ private fun DetailsContent(
                     Text(details.overview, color = Color.White.copy(alpha = 0.88f), fontSize = 15.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         if (details.type == MediaType.MOVIE.wireName) {
-                            FocusButton("Play", onMoviePlay, icon = Icons.Rounded.PlayArrow)
+                            FocusButton("Play", onMoviePlay, icon = Icons.Rounded.PlayArrow, modifier = Modifier.focusRequester(actionFocusRequester))
                         }
                         FocusButton(
                             if (isTracked) "In tracker" else "Add to tracker",
                             onToggleTracked,
                             selected = isTracked,
                             icon = if (isTracked) Icons.Rounded.Check else Icons.Rounded.Add,
+                            modifier = if (details.type == MediaType.TV.wireName) Modifier.focusRequester(actionFocusRequester) else Modifier,
                         )
                     }
                 }
@@ -392,6 +483,35 @@ private fun DetailsContent(
                     }
                 }
             }
+        }
+        item(key = "about") {
+            Column(Modifier.padding(horizontal = ScreenGutter), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("About ${details.title}", color = TextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                val facts = listOfNotNull(
+                    details.status.takeIf(String::isNotBlank)?.let { "Status: $it" },
+                    details.creators.takeIf { it.isNotEmpty() }?.joinToString()?.let { "Created by: $it" },
+                    details.countries.takeIf { it.isNotEmpty() }?.joinToString()?.let { "Countries: $it" },
+                    details.networks.takeIf { it.isNotEmpty() }?.joinToString { it.name }?.let { "Networks: $it" },
+                )
+                facts.forEach { Text(it, color = TextSecondary, fontSize = 14.sp) }
+            }
+        }
+        if (details.cast.isNotEmpty()) item(key = "cast") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Cast", color = TextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = ScreenGutter))
+                LazyRow(contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    items(details.cast, key = { it.id }) { person ->
+                        Column(Modifier.width(116.dp)) {
+                            AsyncImage(person.profileUrl, person.name, Modifier.width(116.dp).height(145.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
+                            Text(person.name, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(person.character, color = TextSecondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+        if (details.recommendations.isNotEmpty()) item(key = "recommendations") {
+            MediaShelf(app.ncinq.tv.data.MediaRow("More like this", details.recommendations), onOpenRelated)
         }
     }
 }
@@ -475,6 +595,7 @@ fun TrackerScreen(viewModel: AppViewModel, onResume: () -> Unit) {
 @Composable
 fun SettingsScreen(viewModel: AppViewModel) {
     val updateMessage by viewModel.updateCheckMessage.collectAsState()
+    val installState by viewModel.updateInstallState.collectAsState()
     Column(
         modifier = Modifier.fillMaxSize().background(AppBackground).padding(horizontal = ScreenGutter, vertical = 30.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
@@ -487,6 +608,12 @@ fun SettingsScreen(viewModel: AppViewModel) {
             FocusButton("Check for updates", onClick = viewModel::checkForUpdates, icon = Icons.Rounded.SystemUpdate)
             updateMessage?.let { message ->
                 Text(message, color = if (message.contains("up to date")) Success else TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(top = 5.dp))
+            }
+            if (installState.active) {
+                Text(installState.message, color = TextSecondary, fontSize = 14.sp)
+                Box(Modifier.width(360.dp).height(6.dp).background(Color.White.copy(alpha = 0.16f))) {
+                    Box(Modifier.fillMaxWidth(installState.progress / 100f).height(6.dp).background(BrandBright))
+                }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.08f)))

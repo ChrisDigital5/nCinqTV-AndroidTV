@@ -18,7 +18,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         enterImmersiveMode()
-        updateInstaller = UpdateInstaller(this)
+        updateInstaller = UpdateInstaller(this, viewModel::setUpdateInstallState)
 
         setContent {
             NCinqTheme {

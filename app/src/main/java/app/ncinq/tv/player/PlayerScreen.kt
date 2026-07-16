@@ -1,20 +1,25 @@
 package app.ncinq.tv.player
 
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +29,8 @@ import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -41,9 +48,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,7 +112,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(45_000)
-            .setUserAgent("nCinqTV/1.0.2 (Android TV; Media3)")
+            .setUserAgent("nCinqTV/1.1.0 (Android TV; Media3)")
     }
     val mediaSourceFactory = remember {
         DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpDataSourceFactory))
@@ -131,6 +140,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     val captionResolver = remember { CaptionResolver() }
     val rootFocusRequester = remember { FocusRequester() }
     val retryFocusRequester = remember { FocusRequester() }
+    val controlFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     var stream by remember { mutableStateOf<StreamResult?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -138,10 +148,11 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     var reloadKey by remember { mutableIntStateOf(0) }
     var automaticRetries by remember { mutableIntStateOf(0) }
     var prefetched by remember { mutableStateOf(false) }
+    var nextRequest by remember { mutableStateOf<PlaybackRequest?>(null) }
     var transitionInFlight by remember { mutableStateOf(false) }
     var finished by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
-    var controlsEpoch by remember { mutableIntStateOf(0) }
+    var lastInteractionMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var isPlaying by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
@@ -152,7 +163,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
 
     fun showControls() {
         controlsVisible = true
-        controlsEpoch += 1
+        lastInteractionMs = SystemClock.elapsedRealtime()
     }
 
     fun saveProgress(completed: Boolean = false) {
@@ -169,7 +180,8 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     fun seekBy(offsetMs: Long) {
         val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         player.seekTo((player.currentPosition + offsetMs).coerceIn(0L, duration))
-        seekFeedback = if (offsetMs < 0) "-10" else "+10"
+        val seconds = (kotlin.math.abs(offsetMs) / 1_000L).coerceAtLeast(1L)
+        seekFeedback = if (offsetMs < 0) "-$seconds" else "+$seconds"
         seekFeedbackEpoch += 1
         showControls()
     }
@@ -187,6 +199,16 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         automaticRetries = 0
         retryPositionMs = player.currentPosition.coerceAtLeast(0L)
         reloadKey += 1
+    }
+
+    fun switchEpisode(next: Boolean) {
+        if (transitionInFlight || activeRequest.mediaType != MediaType.TV) return
+        transitionInFlight = true
+        saveProgress()
+        scope.launch {
+            val target = if (next) viewModel.nextPlayback(activeRequest) else viewModel.previousPlayback(activeRequest)
+            if (target != null) viewModel.advanceTo(target) else transitionInFlight = false
+        }
     }
 
     BackHandler {
@@ -215,8 +237,10 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_READY -> {
+                        val wasPreparing = loading
                         loading = false
                         durationMs = player.duration.coerceAtLeast(0L)
+                        if (wasPreparing) showControls()
                     }
                     Player.STATE_ENDED -> {
                         if (transitionInFlight) return
@@ -238,7 +262,6 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
 
             override fun onIsPlayingChanged(value: Boolean) {
                 isPlaying = value
-                if (!value && player.playbackState == Player.STATE_READY) showControls()
             }
 
             override fun onPlayerError(playbackError: PlaybackException) {
@@ -279,6 +302,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         error = null
         finished = false
         prefetched = false
+        nextRequest = null
         transitionInFlight = false
         stream = null
         player.stop()
@@ -317,19 +341,19 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             if (positionMs > 0 && player.playbackState != Player.STATE_ENDED && positionMs % 5_000 < 600) {
                 viewModel.saveProgress(activeRequest, positionMs, durationMs)
             }
+            if (controlsVisible && player.playWhenReady && error == null && !loading &&
+                SystemClock.elapsedRealtime() - lastInteractionMs >= CONTROLS_TIMEOUT_MS
+            ) {
+                controlsVisible = false
+            }
             if (!prefetched && activeRequest.mediaType == MediaType.TV && durationMs > 0 &&
                 positionMs >= (durationMs * 0.72).toLong()
             ) {
                 prefetched = true
-                viewModel.prefetchNext(activeRequest)
+                nextRequest = viewModel.nextPlayback(activeRequest)?.also { next ->
+                    runCatching { viewModel.resolveStream(next) }
+                }
             }
-        }
-    }
-
-    LaunchedEffect(controlsVisible, controlsEpoch, isPlaying, error, loading) {
-        if (controlsVisible && isPlaying && error == null && !loading) {
-            delay(CONTROLS_TIMEOUT_MS)
-            controlsVisible = false
         }
     }
 
@@ -342,6 +366,14 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
 
     LaunchedEffect(error) {
         if (error != null) retryFocusRequester.requestFocus() else rootFocusRequester.requestFocus()
+    }
+
+    LaunchedEffect(controlsVisible, error, loading) {
+        if (controlsVisible && error == null && !loading) {
+            delay(250)
+            controlFocusRequester.requestFocus()
+        }
+        else if (!controlsVisible && error == null) rootFocusRequester.requestFocus()
     }
 
     Box(
@@ -358,8 +390,10 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     KeyEvent.KEYCODE_ENTER,
                     KeyEvent.KEYCODE_SPACE,
                     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                        if (error != null) retryPlayback() else togglePlayback()
-                        true
+                        if (controlsVisible && error == null) false else {
+                            if (error != null) retryPlayback() else togglePlayback()
+                            true
+                        }
                     }
                     KeyEvent.KEYCODE_MEDIA_PLAY -> {
                         player.play()
@@ -373,18 +407,24 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT,
                     KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                        if (error == null) seekBy(-SEEK_INCREMENT_MS)
-                        true
+                        if (controlsVisible && native.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) false else {
+                            if (error == null) seekBy(-SEEK_INCREMENT_MS)
+                            true
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT,
                     KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                        if (error == null) seekBy(SEEK_INCREMENT_MS)
-                        true
+                        if (controlsVisible && native.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) false else {
+                            if (error == null) seekBy(SEEK_INCREMENT_MS)
+                            true
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_UP,
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        showControls()
-                        true
+                        if (controlsVisible) false else {
+                            showControls()
+                            true
+                        }
                     }
                     KeyEvent.KEYCODE_CAPTIONS,
                     KeyEvent.KEYCODE_MENU -> {
@@ -418,7 +458,27 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                 durationMs = durationMs,
                 captionsAvailable = stream?.captions?.isNotEmpty() == true,
                 captionsEnabled = captionsEnabled,
+                playFocusRequester = controlFocusRequester,
+                onPlayPause = ::togglePlayback,
+                onSeek = ::seekBy,
+                onCaptions = ::toggleCaptions,
+                onPreviousEpisode = { switchEpisode(next = false) },
+                onNextEpisode = { switchEpisode(next = true) },
             )
+        }
+
+        val upcoming = nextRequest
+        if (!controlsVisible && error == null && !loading && upcoming != null && durationMs > positionMs && durationMs - positionMs <= 30_000L) {
+            Column(
+                Modifier.align(Alignment.BottomEnd).padding(34.dp).width(330.dp)
+                    .background(Color.Black.copy(alpha = 0.9f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Up next in ${((durationMs - positionMs) / 1_000L).coerceAtLeast(1)}s", color = BrandBright, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("S${upcoming.season} E${upcoming.episode}  ${upcoming.episodeTitle.orEmpty()}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+                FocusButton("Play next now", onClick = { switchEpisode(next = true) }, selected = true)
+            }
         }
 
         seekFeedback?.let { amount ->
@@ -486,6 +546,12 @@ private fun PlayerChrome(
     durationMs: Long,
     captionsAvailable: Boolean,
     captionsEnabled: Boolean,
+    playFocusRequester: FocusRequester,
+    onPlayPause: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onCaptions: () -> Unit,
+    onPreviousEpisode: () -> Unit,
+    onNextEpisode: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
         Column(
@@ -504,29 +570,37 @@ private fun PlayerChrome(
                 }
                 Text("${formatTime(positionMs)}  /  ${formatTime(durationMs)}", color = TextSecondary, fontSize = 12.sp)
             }
-            Box(Modifier.fillMaxWidth().height(5.dp).background(Color.White.copy(alpha = 0.24f))) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(playbackFraction(positionMs, durationMs))
-                        .height(5.dp)
-                        .background(BrandBright),
-                )
-            }
+            ScrubRail(positionMs, durationMs, onSeek)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
-                ControlGlyph(Icons.Rounded.Replay, "10 sec")
-                Spacer(Modifier.width(42.dp))
-                ControlGlyph(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (isPlaying) "Pause" else "Play", primary = true)
-                Spacer(Modifier.width(42.dp))
-                ControlGlyph(Icons.Rounded.FastForward, "10 sec")
+                if (request.mediaType == MediaType.TV) {
+                    PlayerControl(Icons.Rounded.SkipPrevious, "Previous", onPreviousEpisode)
+                    Spacer(Modifier.width(24.dp))
+                }
+                PlayerControl(Icons.Rounded.Replay, "10 sec", { onSeek(-SEEK_INCREMENT_MS) })
+                Spacer(Modifier.width(24.dp))
+                PlayerControl(
+                    if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    if (isPlaying) "Pause" else "Play",
+                    onPlayPause,
+                    primary = true,
+                    modifier = Modifier.focusRequester(playFocusRequester),
+                )
+                Spacer(Modifier.width(24.dp))
+                PlayerControl(Icons.Rounded.FastForward, "10 sec", { onSeek(SEEK_INCREMENT_MS) })
+                if (request.mediaType == MediaType.TV) {
+                    Spacer(Modifier.width(24.dp))
+                    PlayerControl(Icons.Rounded.SkipNext, "Next", onNextEpisode)
+                }
                 if (captionsAvailable) {
-                    Spacer(Modifier.width(70.dp))
-                    ControlGlyph(
+                    Spacer(Modifier.width(40.dp))
+                    PlayerControl(
                         Icons.Rounded.ClosedCaption,
                         if (captionsEnabled) "Captions on" else "Captions off",
+                        onCaptions,
                         active = captionsEnabled,
                     )
                 }
@@ -536,20 +610,70 @@ private fun PlayerChrome(
 }
 
 @Composable
-private fun ControlGlyph(icon: ImageVector, label: String, primary: Boolean = false, active: Boolean = false) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+private fun PlayerControl(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    primary: Boolean = false,
+    active: Boolean = false,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier.onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
         Box(
             modifier = Modifier
                 .size(if (primary) 54.dp else 42.dp)
+                .border(if (focused) 3.dp else 0.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
                 .background(
-                    if (primary || active) BrandBright else Panel.copy(alpha = 0.9f),
+                    if (focused) Color.White else if (primary || active) BrandBright else Panel.copy(alpha = 0.9f),
                     androidx.compose.foundation.shape.CircleShape,
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = label, tint = if (primary || active) Color.Black else Color.White, modifier = Modifier.size(25.dp))
+            Icon(icon, contentDescription = label, tint = if (focused || primary || active) Color.Black else Color.White, modifier = Modifier.size(25.dp))
         }
-        Text(label, color = TextSecondary, fontSize = 11.sp)
+        Text(label, color = if (focused) Color.White else TextSecondary, fontSize = 11.sp, fontWeight = if (focused) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@Composable
+private fun ScrubRail(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    BoxWithConstraints(
+        Modifier.fillMaxWidth().height(22.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
+                when (event.nativeKeyEvent.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { onSeek(-30_000L); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { onSeek(30_000L); true }
+                    else -> false
+                }
+            }
+            .background(Color.Transparent),
+        contentAlignment = Alignment.Center,
+    ) {
+        val fraction = playbackFraction(positionMs, durationMs)
+        val railHeight = if (focused) 9.dp else 5.dp
+        Box(Modifier.fillMaxWidth().height(railHeight).background(Color.White.copy(alpha = 0.28f))) {
+            Box(Modifier.fillMaxWidth(fraction).height(railHeight).background(BrandBright))
+        }
+        Box(
+            Modifier
+                .offset(x = (maxWidth * fraction - 7.dp).coerceIn(0.dp, maxWidth - 14.dp))
+                .size(if (focused) 14.dp else 9.dp)
+                .background(Color.White, androidx.compose.foundation.shape.CircleShape)
+                .border(
+                    if (focused) 2.dp else 0.dp,
+                    BrandBright,
+                    androidx.compose.foundation.shape.CircleShape,
+                ),
+        )
     }
 }
 

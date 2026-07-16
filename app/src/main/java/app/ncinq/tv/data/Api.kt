@@ -24,10 +24,18 @@ interface NCinqApi {
         @Path("type") type: String,
         @Query("category") category: String = "popular",
         @Query("page") page: Int = 1,
+        @Query("genre") genre: Int? = null,
+        @Query("network") network: Int? = null,
+        @Query("sort") sort: String? = null,
+        @Query("year") year: Int? = null,
     ): CatalogPage
 
     @GET("api/android/search")
-    suspend fun search(@Query("q") query: String): SearchResults
+    suspend fun search(
+        @Query("q") query: String,
+        @Query("type") type: String? = null,
+        @Query("page") page: Int = 1,
+    ): SearchResults
 
     @GET("api/android/details/{type}/{id}")
     suspend fun details(
@@ -54,6 +62,13 @@ object ApiClient {
         .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         .callTimeout(50, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            val request = chain.request()
+            val versioned = if (request.method == "GET") {
+                request.newBuilder().url(request.url.newBuilder().addQueryParameter("tvApi", "2").build()).build()
+            } else request
+            chain.proceed(versioned)
+        }
         .addInterceptor(HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
         })
@@ -69,8 +84,17 @@ object ApiClient {
 
 class CatalogRepository(private val api: NCinqApi = ApiClient.service) {
     suspend fun home() = api.home()
-    suspend fun catalog(type: MediaType, category: String = "popular") = api.catalog(type.wireName, category)
-    suspend fun search(query: String) = api.search(query)
+    suspend fun catalog(
+        type: MediaType,
+        category: String = "popular",
+        page: Int = 1,
+        genre: Int? = null,
+        network: Int? = null,
+        sort: String? = null,
+        year: Int? = null,
+    ) = api.catalog(type.wireName, category, page, genre, network, sort, year)
+    suspend fun search(query: String, type: MediaType? = null, page: Int = 1) =
+        api.search(query, type?.wireName, page)
     suspend fun details(type: MediaType, id: Int) = api.details(type.wireName, id)
     suspend fun season(showId: Int, season: Int) = api.season(showId, season)
     suspend fun update(versionCode: Int) = api.update(versionCode)
