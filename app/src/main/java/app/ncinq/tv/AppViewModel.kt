@@ -52,6 +52,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _update = MutableStateFlow<UpdateInfo?>(null)
     val update: StateFlow<UpdateInfo?> = _update.asStateFlow()
 
+    private val _updateCheckMessage = MutableStateFlow<String?>(null)
+    val updateCheckMessage: StateFlow<String?> = _updateCheckMessage.asStateFlow()
+
+    val currentVersionName: String = BuildConfig.VERSION_NAME
+
     val trackedItems = trackerRepository.items
 
     private val streamCache = ConcurrentHashMap<String, StreamResult>()
@@ -60,7 +65,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadHome()
-        checkForUpdate()
+        checkForUpdate(manual = false)
     }
 
     fun loadHome(force: Boolean = false) {
@@ -239,10 +244,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _update.value = null
     }
 
-    private fun checkForUpdate() {
+    fun checkForUpdates() {
+        checkForUpdate(manual = true)
+    }
+
+    private fun checkForUpdate(manual: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
-            val info = runCatching { catalogRepository.update(BuildConfig.VERSION_CODE) }.getOrNull()
-            if (info?.available == true) _update.value = info
+            if (manual) _updateCheckMessage.value = "Checking for updates..."
+            runCatching { catalogRepository.update(BuildConfig.VERSION_CODE) }
+                .onSuccess { info ->
+                    if (info.available) {
+                        _update.value = info
+                        if (manual) _updateCheckMessage.value = "Version ${info.versionName} is ready to install."
+                    } else if (manual) {
+                        _updateCheckMessage.value = "nCinqTV is up to date."
+                    }
+                }
+                .onFailure {
+                    if (manual) _updateCheckMessage.value = "Could not check for updates. Try again."
+                }
         }
     }
 

@@ -5,15 +5,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
 
-val AppBackground = Color(0xFF06070A)
-val Panel = Color(0xFF111827)
-val PanelRaised = Color(0xFF1C2940)
-val Brand = Color(0xFF6366F1)
-val BrandBright = Color(0xFF818CF8)
-val Success = Color(0xFF34D399)
-val Warning = Color(0xFFFBBF24)
-val TextPrimary = Color(0xFFF8FAFC)
-val TextSecondary = Color(0xFFA8B3C7)
+val AppBackground = Color(0xFF08090B)
+val Panel = Color(0xFF17191E)
+val PanelRaised = Color(0xFF252830)
+val Brand = Color(0xFFE23D4F)
+val BrandBright = Color(0xFFFF5968)
+val Success = Color(0xFF2DD4A8)
+val Warning = Color(0xFFF4C95D)
+val TextPrimary = Color(0xFFF7F7F8)
+val TextSecondary = Color(0xFFADB1BA)
 
 @Composable
 fun NCinqTheme(content: @Composable () -> Unit) {
