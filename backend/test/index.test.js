@@ -64,3 +64,16 @@ test('/dl redirects to the latest public release asset', async () => {
   assert.equal(response.status, 302);
   assert.equal(response.headers.get('location'), 'https://github.test/app.apk');
 });
+
+test('/dl supports HEAD checks', async () => {
+  const response = await handleRequest(
+    new Request('https://tv.ncinq.app/dl', { method: 'HEAD' }),
+    env,
+    async () => Response.json({
+      tag_name: 'v1.0.1',
+      assets: [{ name: 'ncinq-tv-v1.0.1.apk', browser_download_url: 'https://github.test/app.apk' }],
+    }),
+  );
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get('location'), 'https://github.test/app.apk');
+});

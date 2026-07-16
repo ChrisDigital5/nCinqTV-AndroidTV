@@ -190,10 +190,11 @@ async function updateInfo(requestUrl, env, fetchFn) {
 
 export async function handleRequest(request, env, fetchFn = fetch) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: JSON_HEADERS });
-  if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
 
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
+  const isDownloadHead = request.method === 'HEAD' && path === '/dl';
+  if (request.method !== 'GET' && !isDownloadHead) return json({ error: 'Method not allowed' }, 405);
 
   try {
     if (path === '/dl') {
