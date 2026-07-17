@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
@@ -107,13 +108,16 @@ fun MediaCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     progress: Float = 0f,
+    cardWidth: Dp = 172.dp,
+    posterHeight: Dp = 258.dp,
+    focusedScale: Float = 1.09f,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.09f else 1f, label = "posterScale")
+    val scale by animateFloatAsState(if (focused) focusedScale else 1f, label = "posterScale")
 
     Column(
         modifier = modifier
-            .width(172.dp)
+            .width(cardWidth)
             .scale(scale)
             .graphicsLayer { shadowElevation = if (focused) 18.dp.toPx() else 0f }
             .onFocusChanged { focused = it.isFocused }
@@ -121,7 +125,7 @@ fun MediaCard(
     ) {
         Box(
             modifier = Modifier
-                .size(width = 172.dp, height = 258.dp)
+                .size(width = cardWidth, height = posterHeight)
                 .clip(CardShape)
                 .background(Panel)
                 .border(

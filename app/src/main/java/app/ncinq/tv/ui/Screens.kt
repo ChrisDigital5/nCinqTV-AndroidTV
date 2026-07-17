@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -344,14 +345,14 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
         searchFocusRequester.requestFocus()
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(AppBackground)) {
+    Column(modifier = Modifier.fillMaxSize().background(AppBackground).imePadding()) {
         ScreenTitle("Search")
         Row(
             modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = ScreenGutter, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(28.dp),
         ) {
             Column(
-                modifier = Modifier.width(330.dp).fillMaxHeight(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(
@@ -410,7 +411,7 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
                 }
             }
 
-            Column(Modifier.weight(1f).fillMaxHeight()) {
+            Column(Modifier.weight(2f).fillMaxHeight()) {
                 Text(
                     if (query.isBlank()) "Results" else "Results for \"${query.trim()}\"",
                     color = TextPrimary,
@@ -428,10 +429,10 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
                         )
                     } else {
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(172.dp),
-                            contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(20.dp),
-                            verticalArrangement = Arrangement.spacedBy(25.dp),
+                            columns = GridCells.Adaptive(132.dp),
+                            contentPadding = PaddingValues(vertical = 8.dp, horizontal = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(18.dp),
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             itemsIndexed(value.value.items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
@@ -439,6 +440,9 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
                                 MediaCard(
                                     item = item,
                                     onClick = { onOpen(item) },
+                                    cardWidth = 132.dp,
+                                    posterHeight = 198.dp,
+                                    focusedScale = 1.05f,
                                 )
                             }
                         }

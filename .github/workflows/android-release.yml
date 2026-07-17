@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -39,6 +41,20 @@ jobs:
       - name: Name APK
         run: cp app/build/outputs/apk/release/app-release.apk ncinq-tv-${{ github.ref_name }}.apk
 
+      - name: Build release notes
+        run: |
+          previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            release_range="${previous_tag}..${GITHUB_SHA}"
+          else
+            release_range="${GITHUB_SHA}"
+          fi
+          {
+            echo "What's changed"
+            echo
+            git log --no-merges --format='- %s' "$release_range"
+          } > release-notes.md
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,7 +62,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             gh release create "$GITHUB_REF_NAME" \
               "ncinq-tv-${GITHUB_REF_NAME}.apk" \
-              --generate-notes \
+              --notes-file release-notes.md \
               --title "$GITHUB_REF_NAME" && exit 0
             echo "GitHub release API unavailable (attempt $attempt of 5)"
             sleep 20

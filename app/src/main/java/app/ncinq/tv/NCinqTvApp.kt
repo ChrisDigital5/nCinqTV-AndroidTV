@@ -37,9 +37,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,6 +96,10 @@ private object Routes {
 
 private data class Destination(val route: String, val label: String, val icon: ImageVector)
 
+private class NavigationRailFocusGate {
+    var acceptsFocus by mutableStateOf(true)
+}
+
 @Composable
 fun NCinqTvApp(
     viewModel: AppViewModel,
@@ -98,14 +110,15 @@ fun NCinqTvApp(
     val route = backStackEntry?.destination?.route
     val update by viewModel.update.collectAsState()
     val installState by viewModel.updateInstallState.collectAsState()
+    val railFocusGate = remember { NavigationRailFocusGate() }
 
     Box(Modifier.fillMaxSize().background(AppBackground)) {
         if (route == Routes.PLAYER) {
             PlayerScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
         } else {
             Row(Modifier.fillMaxSize()) {
-                NavigationRail(navController = navController, currentRoute = route)
-                AppNavHost(navController = navController, viewModel = viewModel)
+                NavigationRail(navController = navController, currentRoute = route, focusGate = railFocusGate)
+                AppNavHost(navController = navController, viewModel = viewModel, railFocusGate = railFocusGate)
             }
         }
 
@@ -123,11 +136,36 @@ fun NCinqTvApp(
 }
 
 @Composable
-private fun AppNavHost(navController: NavHostController, viewModel: AppViewModel) {
+private fun AppNavHost(
+    navController: NavHostController,
+    viewModel: AppViewModel,
+    railFocusGate: NavigationRailFocusGate,
+) {
+    val focusManager = LocalFocusManager.current
     NavHost(
         navController = navController,
         startDestination = Routes.HOME,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                val direction = when (event.key) {
+                    Key.DirectionUp -> FocusDirection.Up
+                    Key.DirectionDown -> FocusDirection.Down
+                    else -> return@onPreviewKeyEvent false
+                }
+                if (event.type == KeyEventType.KeyDown) {
+                    // A vertical search must never escape the page and choose the rail as
+                    // a spatial fallback. Left/right navigation remains untouched, so the
+                    // rail is still reachable from the leftmost item on the page.
+                    railFocusGate.acceptsFocus = false
+                    try {
+                        focusManager.moveFocus(direction)
+                    } finally {
+                        railFocusGate.acceptsFocus = true
+                    }
+                }
+                true
+            },
     ) {
         composable(Routes.HOME) {
             HomeScreen(
@@ -183,7 +221,11 @@ private fun NavHostController.openDetails(item: MediaItem) {
 }
 
 @Composable
-private fun NavigationRail(navController: NavHostController, currentRoute: String?) {
+private fun NavigationRail(
+    navController: NavHostController,
+    currentRoute: String?,
+    focusGate: NavigationRailFocusGate,
+) {
     val destinations = listOf(
         Destination(Routes.HOME, "Home", Icons.Rounded.Home),
         Destination(Routes.MOVIES, "Movies", Icons.Rounded.LocalMovies),
@@ -232,6 +274,7 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
                 destination = destination,
                 expanded = expanded,
                 selected = currentRoute == destination.route,
+                canFocus = { focusGate.acceptsFocus },
                 onClick = {
                     navController.navigate(destination.route) {
                         popUpTo(Routes.HOME) { saveState = false }
@@ -259,6 +302,7 @@ private fun RailItem(
     destination: Destination,
     expanded: Boolean,
     selected: Boolean,
+    canFocus: () -> Boolean,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -274,6 +318,7 @@ private fun RailItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .background(background)
+            .focusProperties { this.canFocus = canFocus() }
             .onFocusChanged {
                 focused = it.isFocused
             }
@@ -305,7 +350,7 @@ private fun UpdateDialog(info: UpdateInfo, installState: UpdateInstallState, onL
         ) {
             Text("nCinqTV ${info.versionName} is ready", color = TextPrimary, fontSize = 25.sp, fontWeight = FontWeight.Bold)
             Text(
-                info.releaseNotes.ifBlank { "A new Android TV update is available." },
+                info.releaseNotes.toDisplayChangelog(),
                 color = TextSecondary,
                 fontSize = 14.sp,
                 maxLines = 7,
@@ -327,4 +372,19 @@ private fun UpdateDialog(info: UpdateInfo, installState: UpdateInstallState, onL
             }
         }
     }
+}
+
+private fun String.toDisplayChangelog(): String {
+    val readableNotes = lineSequence()
+        .map { it.trim() }
+        .filterNot { line ->
+            line.contains("Full Changelog", ignoreCase = true) &&
+                line.contains("/compare/", ignoreCase = true)
+        }
+        .joinToString("\n")
+        .replace(Regex("^#{1,6}\\s*", RegexOption.MULTILINE), "")
+        .replace("**", "")
+        .replace(Regex("\\[([^]]+)]\\(https?://[^)]+\\)"), "$1")
+        .trim()
+    return readableNotes.ifBlank { "A new Android TV update is available." }
 }
