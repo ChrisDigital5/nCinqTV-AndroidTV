@@ -64,6 +64,7 @@ import app.ncinq.tv.ui.DetailsScreen
 import app.ncinq.tv.ui.FocusButton
 import app.ncinq.tv.ui.HomeScreen
 import app.ncinq.tv.ui.Panel
+import app.ncinq.tv.ui.OverscanVertical
 import app.ncinq.tv.ui.SearchScreen
 import app.ncinq.tv.ui.SettingsScreen
 import app.ncinq.tv.ui.TextPrimary
@@ -128,6 +129,9 @@ private fun AppNavHost(navController: NavHostController, viewModel: AppViewModel
             HomeScreen(
                 viewModel,
                 onOpen = { navController.openDetails(it) },
+                onPlay = { item ->
+                    viewModel.playFeatured(item) { navController.navigate(Routes.PLAYER) }
+                },
                 onNetwork = { navController.navigate("network/${it.id}") },
             )
         }
@@ -182,7 +186,7 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
         Destination(Routes.SETTINGS, "Settings", Icons.Rounded.Settings),
     )
     var expanded by remember { mutableStateOf(false) }
-    val railWidth by animateDpAsState(if (expanded) 196.dp else 74.dp, label = "railWidth")
+    val railWidth by animateDpAsState(if (expanded) 238.dp else 112.dp, label = "railWidth")
 
     Column(
         modifier = Modifier
@@ -190,11 +194,11 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
             .fillMaxHeight()
             .background(Color(0xFF0D0E11))
             .border(width = 0.5.dp, color = Color.White.copy(alpha = 0.08f))
-            .padding(horizontal = 10.dp, vertical = 18.dp),
+            .padding(start = 48.dp, end = 10.dp, top = OverscanVertical, bottom = OverscanVertical),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+            modifier = Modifier.padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Image(

@@ -192,6 +192,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun playFeatured(item: app.ncinq.tv.data.MediaItem, onReady: () -> Unit) {
+        viewModelScope.launch {
+            val type = MediaType.fromWire(item.type)
+            val details = runCatching { catalogRepository.details(type, item.id) }.getOrNull() ?: return@launch
+            if (type == MediaType.MOVIE) {
+                playMovie(details)
+            } else {
+                val firstSeason = details.seasons.firstOrNull()?.number ?: 1
+                val season = runCatching { catalogRepository.season(details.id, firstSeason) }.getOrNull() ?: return@launch
+                val firstEpisode = season.episodes.firstOrNull()?.number ?: return@launch
+                playEpisode(details, season, firstEpisode)
+            }
+            onReady()
+        }
+    }
+
     fun playEpisode(details: MediaDetails, season: SeasonDetails, episodeNumber: Int) {
         if (season.showId != details.id) return
         val episode = season.episodes.firstOrNull { it.number == episodeNumber } ?: return

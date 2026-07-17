@@ -1,5 +1,6 @@
 package app.ncinq.tv.ui
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -74,31 +75,41 @@ import app.ncinq.tv.data.TrackingStatus
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 
-private val ScreenGutter = 36.dp
+private val ScreenGutter = OverscanHorizontal
 
 @Composable
-fun HomeScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit, onNetwork: (NetworkItem) -> Unit) {
+fun HomeScreen(
+    viewModel: AppViewModel,
+    onOpen: (MediaItem) -> Unit,
+    onPlay: (MediaItem) -> Unit,
+    onNetwork: (NetworkItem) -> Unit,
+) {
     val state by viewModel.home.collectAsState()
     when (val value = state) {
         LoadState.Loading -> LoadingScreen("Loading nCinqTV")
         is LoadState.Failed -> ErrorScreen(value.message) { viewModel.loadHome(force = true) }
         is LoadState.Ready -> {
             val feed = value.value
+            var featuredItem by remember(feed.featured?.id) { mutableStateOf(feed.featured) }
             LazyColumn(
                 modifier = Modifier.fillMaxSize().background(AppBackground),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
-                contentPadding = PaddingValues(bottom = 42.dp),
+                contentPadding = PaddingValues(bottom = OverscanVertical),
             ) {
-                feed.featured?.let { featured ->
+                featuredItem?.let { featured ->
                     item(key = "featured") {
-                        FeaturedHero(featured = featured, onOpen = { onOpen(featured) })
+                        FeaturedHero(
+                            featured = featured,
+                            onPlay = { onPlay(featured) },
+                            onOpen = { onOpen(featured) },
+                        )
                     }
                 }
                 if (feed.networks.isNotEmpty()) {
                     item(key = "networks") { NetworkShelf(feed.networks, onNetwork) }
                 }
                 items(feed.rows, key = { it.title }) { row ->
-                    MediaShelf(row = row, onOpen = onOpen)
+                    MediaShelf(row = row, onOpen = onOpen, onFocus = { featuredItem = it })
                 }
             }
         }
@@ -127,16 +138,18 @@ private fun NetworkShelf(networks: List<NetworkItem>, onNetwork: (NetworkItem) -
 }
 
 @Composable
-private fun FeaturedHero(featured: MediaItem, onOpen: () -> Unit) {
+private fun FeaturedHero(featured: MediaItem, onPlay: () -> Unit, onOpen: () -> Unit) {
     val actionFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(featured.id) { actionFocusRequester.requestFocus() }
-    Box(modifier = Modifier.fillMaxWidth().height(370.dp)) {
-        AsyncImage(
-            model = featured.backdropUrl,
-            contentDescription = featured.title,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-        )
+    LaunchedEffect(Unit) { actionFocusRequester.requestFocus() }
+    Box(modifier = Modifier.fillMaxWidth().height(500.dp)) {
+        Crossfade(targetState = featured, label = "featuredArtwork") { item ->
+            AsyncImage(
+                model = item.backdropUrl,
+                contentDescription = item.title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
         Box(
             Modifier.fillMaxSize().background(
                 Brush.horizontalGradient(
@@ -147,12 +160,12 @@ private fun FeaturedHero(featured: MediaItem, onOpen: () -> Unit) {
             ),
         )
         Box(
-            Modifier.fillMaxWidth().height(70.dp).align(Alignment.BottomCenter).background(
-                Brush.verticalGradient(listOf(Color.Transparent, AppBackground)),
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, AppBackground)),
             ),
         )
         Column(
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = ScreenGutter, end = 24.dp).width(560.dp),
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = ScreenGutter, end = ScreenGutter).width(600.dp),
             verticalArrangement = Arrangement.spacedBy(13.dp),
         ) {
             Text(featured.title, color = Color.White, fontSize = 39.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2)
@@ -169,12 +182,16 @@ private fun FeaturedHero(featured: MediaItem, onOpen: () -> Unit) {
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
-            FocusButton(
-                label = "View details",
-                onClick = onOpen,
-                icon = Icons.Rounded.Info,
-                modifier = Modifier.focusRequester(actionFocusRequester),
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FocusButton(
+                    label = "Play",
+                    onClick = onPlay,
+                    icon = Icons.Rounded.PlayArrow,
+                    emphasis = true,
+                    modifier = Modifier.focusRequester(actionFocusRequester),
+                )
+                FocusButton(label = "More info", onClick = onOpen, icon = Icons.Rounded.Info)
+            }
         }
     }
 }
@@ -417,7 +434,7 @@ private fun DetailsContent(
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         item(key = "header") {
-            Box(Modifier.fillMaxWidth().height(430.dp)) {
+            Box(Modifier.fillMaxWidth().height(500.dp)) {
                 AsyncImage(details.backdropUrl, details.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 Box(
                     Modifier.fillMaxSize().background(
@@ -438,18 +455,17 @@ private fun DetailsContent(
                 ) {
                     Text(details.title, color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2)
                     if (details.tagline.isNotBlank()) Text(details.tagline, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                    Text(
-                        listOfNotNull(
-                            details.year?.toString(),
-                            details.contentRating,
-                            details.runtimeMinutes?.let { "$it min" },
-                            details.rating.takeIf { it > 0 }?.let { "%.1f rating".format(it) },
-                            details.genres.take(3).joinToString(" / ").takeIf(String::isNotBlank),
-                        ).joinToString("  |  "),
-                        color = Color.White.copy(alpha = 0.78f),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        details.rating.takeIf { it > 0 }?.let { MetadataTag("%.1f rating".format(it), highlighted = true) }
+                        details.year?.let { MetadataTag(it.toString()) }
+                        details.contentRating?.let { MetadataTag(it) }
+                        if (details.type == MediaType.TV.wireName && details.seasonCount > 0) {
+                            MetadataTag("${details.seasonCount} season${if (details.seasonCount == 1) "" else "s"}")
+                        } else {
+                            details.runtimeMinutes?.let { MetadataTag("$it min") }
+                        }
+                        details.genres.firstOrNull()?.let { MetadataTag(it) }
+                    }
                     Text(details.overview, color = Color.White.copy(alpha = 0.88f), fontSize = 15.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         if (canContinue) {
@@ -554,7 +570,7 @@ private fun DetailsContent(
 @Composable
 private fun EpisodeCard(episode: Episode, watched: Boolean, progress: Float, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val scale = if (focused) 1.045f else 1f
+    val scale = if (focused) 1.09f else 1f
     Column(
         modifier = Modifier.width(250.dp).scale(scale).onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick),
     ) {
@@ -587,6 +603,21 @@ private fun EpisodeCard(episode: Episode, watched: Boolean, progress: Float, onC
         Text(episode.name, color = TextPrimary, fontSize = 14.sp, fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         episode.runtimeMinutes?.let { Text("$it min", color = TextSecondary, fontSize = 11.sp) }
     }
+}
+
+@Composable
+private fun MetadataTag(label: String, highlighted: Boolean = false) {
+    Text(
+        text = label,
+        color = if (highlighted) Success else Color.White.copy(alpha = 0.9f),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.48f))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    )
 }
 
 private enum class TrackerFilter { ALL, CONTINUE, PLANNED, COMPLETED }

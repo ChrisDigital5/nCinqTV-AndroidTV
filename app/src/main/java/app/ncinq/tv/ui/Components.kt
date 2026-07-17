@@ -53,18 +53,19 @@ fun FocusButton(
     selected: Boolean = false,
     enabled: Boolean = true,
     icon: ImageVector? = null,
+    emphasis: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.04f else 1f, label = "buttonScale")
     val background = when {
         !enabled -> Panel.copy(alpha = 0.5f)
-        focused -> Color.White
+        focused || emphasis -> Color.White
         selected -> Brand
         else -> PanelRaised.copy(alpha = 0.96f)
     }
     val contentColor = when {
         !enabled -> TextSecondary.copy(alpha = 0.6f)
-        focused -> Color.Black
+        focused || emphasis -> Color.Black
         else -> TextPrimary
     }
 
@@ -108,7 +109,7 @@ fun MediaCard(
     progress: Float = 0f,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.055f else 1f, label = "posterScale")
+    val scale by animateFloatAsState(if (focused) 1.09f else 1f, label = "posterScale")
 
     Column(
         modifier = modifier
@@ -164,16 +165,20 @@ fun LandscapeMediaCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     progress: Float = 0f,
+    onFocus: (MediaItem) -> Unit = {},
 ) {
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.045f else 1f, label = "landscapeScale")
+    val scale by animateFloatAsState(if (focused) 1.09f else 1f, label = "landscapeScale")
 
     Column(
         modifier = modifier
             .width(242.dp)
             .scale(scale)
             .graphicsLayer { shadowElevation = if (focused) 18.dp.toPx() else 0f }
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocus(item)
+            }
             .clickable(onClick = onClick),
     ) {
         Box(
@@ -223,21 +228,21 @@ private fun ProgressRail(progress: Float, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MediaShelf(row: MediaRow, onOpen: (MediaItem) -> Unit) {
+fun MediaShelf(row: MediaRow, onOpen: (MediaItem) -> Unit, onFocus: (MediaItem) -> Unit = {}) {
     Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
         Text(
             text = row.title,
             color = TextPrimary,
             fontSize = 21.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 36.dp),
+            modifier = Modifier.padding(horizontal = OverscanHorizontal),
         )
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(20.dp),
-            contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = OverscanHorizontal, vertical = 10.dp),
         ) {
             items(row.items, key = { "${it.type}:${it.id}" }) { item ->
-                LandscapeMediaCard(item = item, onClick = { onOpen(item) })
+                LandscapeMediaCard(item = item, onClick = { onOpen(item) }, onFocus = onFocus)
             }
         }
     }

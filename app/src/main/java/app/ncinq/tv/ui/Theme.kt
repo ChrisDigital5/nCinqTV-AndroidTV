@@ -2,6 +2,7 @@ package app.ncinq.tv.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
 
@@ -14,6 +15,8 @@ val Success = Color(0xFF2DD4A8)
 val Warning = Color(0xFFF4C95D)
 val TextPrimary = Color(0xFFF7F7F8)
 val TextSecondary = Color(0xFFADB1BA)
+val OverscanHorizontal = 58.dp
+val OverscanVertical = 27.dp
 
 @Composable
 fun NCinqTheme(content: @Composable () -> Unit) {
