@@ -356,12 +356,20 @@ fun DetailsScreen(
     val seasonState by viewModel.season.collectAsState()
     val tracked by viewModel.trackedItems.collectAsState()
 
-    when (val value = detailsState) {
+    val currentDetailsState = when (val value = detailsState) {
+        is LoadState.Ready -> if (value.value.id == mediaId && value.value.type == mediaType.wireName) value else LoadState.Loading
+        else -> value
+    }
+
+    when (val value = currentDetailsState) {
         LoadState.Loading -> LoadingScreen("Loading details")
         is LoadState.Failed -> ErrorScreen(value.message) { viewModel.loadDetails(mediaType, mediaId) }
         is LoadState.Ready -> DetailsContent(
             details = value.value,
-            seasonState = seasonState,
+            seasonState = when (val season = seasonState) {
+                is LoadState.Ready -> if (season.value.showId == mediaId) season else LoadState.Loading
+                else -> season
+            },
             isTracked = tracked.any { it.mediaId == mediaId && it.mediaType == mediaType },
             onToggleTracked = { viewModel.toggleTracked(value.value) },
             onSeason = { viewModel.loadSeason(mediaId, it) },

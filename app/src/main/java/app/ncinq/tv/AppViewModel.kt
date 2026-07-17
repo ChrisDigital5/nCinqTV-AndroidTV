@@ -19,6 +19,7 @@ import app.ncinq.tv.data.UpdateInfo
 import app.ncinq.tv.data.UpdateInstallState
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,6 +77,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var catalogQuery = CatalogQuery(MediaType.MOVIE)
     private var searchQuery = ""
     private var searchType: MediaType? = null
+    private var detailsJob: Job? = null
+    private var seasonJob: Job? = null
 
     init {
         loadHome()
@@ -151,7 +154,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadDetails(type: MediaType, id: Int) {
-        viewModelScope.launch {
+        detailsJob?.cancel()
+        seasonJob?.cancel()
+        detailsJob = viewModelScope.launch {
             _details.value = LoadState.Loading
             _season.value = LoadState.Loading
             val loaded = runLoad { catalogRepository.details(type, id) }
@@ -165,7 +170,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadSeason(showId: Int, seasonNumber: Int) {
-        viewModelScope.launch {
+        seasonJob?.cancel()
+        seasonJob = viewModelScope.launch {
             _season.value = LoadState.Loading
             _season.value = runLoad { catalogRepository.season(showId, seasonNumber) }
         }
@@ -184,6 +190,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playEpisode(details: MediaDetails, season: SeasonDetails, episodeNumber: Int) {
+        if (season.showId != details.id) return
         val episode = season.episodes.firstOrNull { it.number == episodeNumber } ?: return
         _activePlayback.value = PlaybackRequest(
             mediaId = details.id,
