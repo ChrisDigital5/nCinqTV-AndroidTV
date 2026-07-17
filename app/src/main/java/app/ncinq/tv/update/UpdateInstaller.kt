@@ -30,6 +30,7 @@ class UpdateInstaller(
     private var downloadId: Long? = null
     private var pendingFile: File? = null
     private var progressJob: Job? = null
+    private var installerLaunched = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -56,6 +57,7 @@ class UpdateInstaller(
         val file = File(directory, "ncinq-tv-${update.versionName}.apk")
         if (file.exists()) file.delete()
         pendingFile = file
+        installerLaunched = false
 
         val request = DownloadManager.Request(Uri.parse(update.downloadUrl))
             .setTitle("nCinqTV ${update.versionName}")
@@ -73,10 +75,19 @@ class UpdateInstaller(
 
     fun onResume() {
         val file = pendingFile ?: return
-        if (file.exists() && canInstallPackages()) install(file)
+        activity.lifecycleScope.launch {
+            repeat(3) {
+                delay(350)
+                if (file.exists() && canInstallPackages()) {
+                    install(file)
+                    return@launch
+                }
+            }
+        }
     }
 
     private fun install(file: File) {
+        if (installerLaunched) return
         if (!canInstallPackages()) {
             onState(UpdateInstallState(true, 100, "Allow nCinqTV to install updates, then return to the app.", true))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -94,6 +105,7 @@ class UpdateInstaller(
             "${activity.packageName}.fileprovider",
             file,
         )
+        installerLaunched = true
         activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, APK_MIME)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -128,7 +140,15 @@ class UpdateInstaller(
                             else -> "Downloading update"
                         }
                         onState(UpdateInstallState(status != DownloadManager.STATUS_FAILED, progress, message))
-                        if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) return@launch
+                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                            pendingFile?.takeIf(File::exists)?.let { file ->
+                                onState(UpdateInstallState(true, 100, "Download complete. Opening installer...", true))
+                                delay(350)
+                                install(file)
+                            }
+                            return@launch
+                        }
+                        if (status == DownloadManager.STATUS_FAILED) return@launch
                     }
                 }
                 delay(500)

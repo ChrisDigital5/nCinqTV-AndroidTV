@@ -19,7 +19,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Bookmarks
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.LocalMovies
@@ -62,21 +63,24 @@ import app.ncinq.tv.ui.BrandBright
 import app.ncinq.tv.ui.CatalogScreen
 import app.ncinq.tv.ui.DetailsScreen
 import app.ncinq.tv.ui.FocusButton
+import app.ncinq.tv.ui.FavoritesScreen
+import app.ncinq.tv.ui.HistoryScreen
 import app.ncinq.tv.ui.HomeScreen
+import app.ncinq.tv.ui.NetworkCatalogScreen
 import app.ncinq.tv.ui.Panel
 import app.ncinq.tv.ui.OverscanVertical
 import app.ncinq.tv.ui.SearchScreen
 import app.ncinq.tv.ui.SettingsScreen
 import app.ncinq.tv.ui.TextPrimary
 import app.ncinq.tv.ui.TextSecondary
-import app.ncinq.tv.ui.TrackerScreen
 
 private object Routes {
     const val HOME = "home"
     const val MOVIES = "movies"
     const val SHOWS = "shows"
     const val SEARCH = "search"
-    const val TRACKER = "tracker"
+    const val HISTORY = "history"
+    const val FAVORITES = "favorites"
     const val SETTINGS = "settings"
     const val PLAYER = "player"
     const val DETAILS = "details/{type}/{id}"
@@ -144,8 +148,11 @@ private fun AppNavHost(navController: NavHostController, viewModel: AppViewModel
         composable(Routes.SEARCH) {
             SearchScreen(viewModel, onOpen = { navController.openDetails(it) })
         }
-        composable(Routes.TRACKER) {
-            TrackerScreen(viewModel, onResume = { navController.navigate(Routes.PLAYER) })
+        composable(Routes.HISTORY) {
+            HistoryScreen(viewModel, onResume = { navController.navigate(Routes.PLAYER) })
+        }
+        composable(Routes.FAVORITES) {
+            FavoritesScreen(viewModel, onOpen = { navController.openDetails(it) })
         }
         composable(Routes.SETTINGS) {
             SettingsScreen(viewModel)
@@ -166,7 +173,7 @@ private fun AppNavHost(navController: NavHostController, viewModel: AppViewModel
         }
         composable("network/{id}") { entry ->
             val networkId = entry.arguments?.getString("id")?.toIntOrNull() ?: return@composable
-            CatalogScreen(viewModel, MediaType.TV, onOpen = { navController.openDetails(it) }, initialNetwork = networkId)
+            NetworkCatalogScreen(viewModel, networkId, onOpen = { navController.openDetails(it) })
         }
     }
 }
@@ -182,7 +189,8 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
         Destination(Routes.MOVIES, "Movies", Icons.Rounded.LocalMovies),
         Destination(Routes.SHOWS, "TV Shows", Icons.Rounded.LiveTv),
         Destination(Routes.SEARCH, "Search", Icons.Rounded.Search),
-        Destination(Routes.TRACKER, "Tracker", Icons.Rounded.Bookmarks),
+        Destination(Routes.HISTORY, "History", Icons.Rounded.History),
+        Destination(Routes.FAVORITES, "Favorites", Icons.Rounded.Favorite),
         Destination(Routes.SETTINGS, "Settings", Icons.Rounded.Settings),
     )
     var expanded by remember { mutableStateOf(false) }
@@ -194,6 +202,7 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
             .fillMaxHeight()
             .background(Color(0xFF0D0E11))
             .border(width = 0.5.dp, color = Color.White.copy(alpha = 0.08f))
+            .onFocusChanged { expanded = it.hasFocus }
             .padding(start = 48.dp, end = 10.dp, top = OverscanVertical, bottom = OverscanVertical),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -223,12 +232,11 @@ private fun NavigationRail(navController: NavHostController, currentRoute: Strin
                 destination = destination,
                 expanded = expanded,
                 selected = currentRoute == destination.route,
-                onFocus = { expanded = it },
                 onClick = {
                     navController.navigate(destination.route) {
-                        popUpTo(Routes.HOME) { saveState = true }
+                        popUpTo(Routes.HOME) { saveState = false }
                         launchSingleTop = true
-                        restoreState = true
+                        restoreState = false
                     }
                 },
             )
@@ -251,7 +259,6 @@ private fun RailItem(
     destination: Destination,
     expanded: Boolean,
     selected: Boolean,
-    onFocus: (Boolean) -> Unit,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -269,7 +276,6 @@ private fun RailItem(
             .background(background)
             .onFocusChanged {
                 focused = it.isFocused
-                onFocus(it.isFocused)
             }
             .clickable(onClick = onClick)
             .padding(horizontal = 11.dp),

@@ -30,11 +30,18 @@ class TrackerRepository(private val context: Context) {
         }
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    suspend fun togglePlanned(details: MediaDetails) {
+    suspend fun toggleFavorite(details: MediaDetails) {
         mutate { current ->
             val existing = current.firstOrNull { it.mediaId == details.id && it.mediaType.wireName == details.type }
             if (existing != null) {
-                current.filterNot { it.mediaId == details.id && it.mediaType.wireName == details.type }
+                val favorite = !existing.isFavorite
+                if (!favorite && existing.status == TrackingStatus.PLANNED) {
+                    current.filterNot { it.mediaId == details.id && it.mediaType.wireName == details.type }
+                } else {
+                    current.map {
+                        if (it.mediaId == details.id && it.mediaType.wireName == details.type) it.copy(favorite = favorite) else it
+                    }
+                }
             } else {
                 current + TrackedItem(
                     mediaId = details.id,
@@ -42,6 +49,7 @@ class TrackerRepository(private val context: Context) {
                     title = details.title,
                     posterUrl = details.posterUrl,
                     backdropUrl = details.backdropUrl,
+                    favorite = true,
                 )
             }
         }
@@ -79,6 +87,7 @@ class TrackerRepository(private val context: Context) {
                 episodeTitle = request.episodeTitle,
                 expectedRuntimeMinutes = request.expectedRuntimeMinutes,
                 watchedEpisodes = watchedEpisodes.toList(),
+                favorite = existing?.isFavorite ?: false,
                 positionMs = if (completed) 0 else positionMs.coerceAtLeast(0),
                 durationMs = durationMs.coerceAtLeast(0),
                 updatedAt = System.currentTimeMillis(),
@@ -90,6 +99,67 @@ class TrackerRepository(private val context: Context) {
     suspend fun remove(item: TrackedItem) {
         mutate { current ->
             current.filterNot { it.mediaId == item.mediaId && it.mediaType == item.mediaType }
+        }
+    }
+
+    suspend fun removeFromHistory(item: TrackedItem) {
+        mutate { current ->
+            current.mapNotNull { existing ->
+                if (existing.mediaId != item.mediaId || existing.mediaType != item.mediaType) return@mapNotNull existing
+                if (existing.isFavorite) {
+                    existing.copy(
+                        status = TrackingStatus.PLANNED,
+                        season = null,
+                        episode = null,
+                        episodeTitle = null,
+                        watchedEpisodes = emptyList(),
+                        positionMs = 0,
+                        durationMs = 0,
+                        favorite = true,
+                    )
+                } else null
+            }
+        }
+    }
+
+    suspend fun removeEpisodeFromHistory(item: TrackedItem, season: Int, episode: Int) {
+        mutate { current ->
+            current.mapNotNull { existing ->
+                if (existing.mediaId != item.mediaId || existing.mediaType != item.mediaType) return@mapNotNull existing
+                val key = "$season:$episode"
+                val remaining = existing.watchedEpisodes.orEmpty().filterNot { it == key }
+                val removingCurrent = existing.season == season && existing.episode == episode
+                if (!removingCurrent) return@mapNotNull existing.copy(watchedEpisodes = remaining)
+
+                val latest = remaining.mapNotNull { value ->
+                    val parts = value.split(':')
+                    val seasonNumber = parts.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+                    val episodeNumber = parts.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+                    seasonNumber to episodeNumber
+                }.maxWithOrNull(compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second })
+
+                when {
+                    latest != null -> existing.copy(
+                        season = latest.first,
+                        episode = latest.second,
+                        episodeTitle = null,
+                        watchedEpisodes = remaining,
+                        positionMs = 0,
+                        durationMs = 0,
+                    )
+                    existing.isFavorite -> existing.copy(
+                        status = TrackingStatus.PLANNED,
+                        season = null,
+                        episode = null,
+                        episodeTitle = null,
+                        watchedEpisodes = emptyList(),
+                        positionMs = 0,
+                        durationMs = 0,
+                        favorite = true,
+                    )
+                    else -> null
+                }
+            }
         }
     }
 

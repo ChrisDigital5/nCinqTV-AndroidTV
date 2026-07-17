@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val catalogRepository = CatalogRepository()
     private val trackerRepository = TrackerRepository(application)
+    private val viewingPreferences = application.getSharedPreferences("viewing_preferences", 0)
 
     private val _home = MutableStateFlow<LoadState<HomeFeed>>(LoadState.Loading)
     val home: StateFlow<LoadState<HomeFeed>> = _home.asStateFlow()
@@ -166,13 +167,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _details.value = loaded
             val details = (loaded as? LoadState.Ready)?.value
             if (type == MediaType.TV && details != null) {
-                val firstSeason = details.seasons.firstOrNull()?.number ?: 1
-                loadSeason(id, firstSeason)
+                val remembered = viewingPreferences.getInt("last_season_$id", 0).takeIf { it > 0 }
+                    ?: trackedItems.value.firstOrNull { it.mediaId == id && it.mediaType == MediaType.TV }?.season
+                val seasonNumber = remembered?.takeIf { candidate -> details.seasons.any { it.number == candidate } }
+                    ?: details.seasons.firstOrNull()?.number ?: 1
+                loadSeason(id, seasonNumber)
             }
         }
     }
 
     fun loadSeason(showId: Int, seasonNumber: Int) {
+        viewingPreferences.edit().putInt("last_season_$showId", seasonNumber).apply()
         seasonJob?.cancel()
         seasonJob = viewModelScope.launch {
             _season.value = LoadState.Loading
@@ -242,6 +247,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             episodeTitle = item.episodeTitle,
             expectedRuntimeMinutes = item.expectedRuntimeMinutes,
             seasonCount = details?.seasonCount ?: 0,
+        )
+    }
+
+    fun resumeHistory(item: TrackedItem, season: Int?, episode: Int?) {
+        resume(
+            item.copy(
+                season = season,
+                episode = episode,
+                episodeTitle = if (item.season == season && item.episode == episode) item.episodeTitle else null,
+                positionMs = if (item.season == season && item.episode == episode) item.positionMs else 0,
+            ),
         )
     }
 
@@ -362,12 +378,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleTracked(details: MediaDetails) {
-        viewModelScope.launch(Dispatchers.IO) { trackerRepository.togglePlanned(details) }
+    fun toggleFavorite(details: MediaDetails) {
+        viewModelScope.launch(Dispatchers.IO) { trackerRepository.toggleFavorite(details) }
     }
 
     fun removeTracked(item: TrackedItem) {
         viewModelScope.launch(Dispatchers.IO) { trackerRepository.remove(item) }
+    }
+
+    fun removeFromHistory(item: TrackedItem) {
+        viewModelScope.launch(Dispatchers.IO) { trackerRepository.removeFromHistory(item) }
+    }
+
+    fun removeEpisodeFromHistory(item: TrackedItem, season: Int, episode: Int) {
+        viewModelScope.launch(Dispatchers.IO) { trackerRepository.removeEpisodeFromHistory(item, season, episode) }
     }
 
     fun dismissUpdate() {

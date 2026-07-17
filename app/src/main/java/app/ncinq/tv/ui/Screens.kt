@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,13 +29,16 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -214,37 +218,39 @@ fun CatalogScreen(
         is LoadState.Failed -> ErrorScreen(value.message) { viewModel.loadCatalog(type, category, genre, initialNetwork, sort) }
         is LoadState.Ready -> Column(Modifier.fillMaxSize().background(AppBackground)) {
             ScreenTitle(if (type == MediaType.MOVIE) "Movies" else "TV Shows")
-            LazyRow(
-                modifier = Modifier.fillMaxWidth().background(Panel.copy(alpha = 0.58f)),
-                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            val categories = if (type == MediaType.MOVIE) {
+                listOf("popular" to "Popular", "top_rated" to "Top rated", "now_playing" to "Now playing", "upcoming" to "Upcoming")
+            } else {
+                listOf("popular" to "Popular", "top_rated" to "Top rated", "airing_today" to "Airing today", "on_the_air" to "On the air")
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().background(Panel.copy(alpha = 0.58f))
+                    .padding(horizontal = ScreenGutter, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                val categories = if (type == MediaType.MOVIE) {
-                    listOf("popular" to "Popular", "top_rated" to "Top rated", "now_playing" to "Now playing", "upcoming" to "Upcoming")
-                } else {
-                    listOf("popular" to "Popular", "top_rated" to "Top rated", "airing_today" to "Airing today", "on_the_air" to "On the air")
-                }
-                items(categories, key = { it.first }) { option ->
-                    FocusButton(option.second, onClick = {
-                        category = option.first; sort = null
-                        viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
-                    }, selected = category == option.first && sort == null)
-                }
-                item {
-                    FocusButton("Newest", onClick = {
+                val browseKey = if (sort != null) "newest" else category
+                val browseOptions = categories + ("newest" to "Newest")
+                FilterDropdown(
+                    label = "Browse: ${browseOptions.firstOrNull { it.first == browseKey }?.second ?: "Popular"}",
+                    options = browseOptions,
+                    selectedKey = browseKey,
+                ) { selected ->
+                    if (selected == "newest") {
                         sort = if (type == MediaType.MOVIE) "primary_release_date.desc" else "first_air_date.desc"
-                        viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
-                    }, selected = sort != null)
+                    } else {
+                        category = selected
+                        sort = null
+                    }
+                    viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
                 }
-                item {
-                    FocusButton("Genre: All", onClick = {
-                        genre = null; viewModel.loadCatalog(type, category, null, initialNetwork, sort)
-                    }, selected = genre == null)
-                }
-                items(value.value.genres, key = { it.id }) { option ->
-                    FocusButton("Genre: ${option.name}", onClick = {
-                        genre = option.id; viewModel.loadCatalog(type, category, option.id, initialNetwork, sort)
-                    }, selected = genre == option.id)
+                val genreOptions = listOf("all" to "All genres") + value.value.genres.map { it.id.toString() to it.name }
+                FilterDropdown(
+                    label = "Genre: ${genreOptions.firstOrNull { it.first == (genre?.toString() ?: "all") }?.second ?: "All"}",
+                    options = genreOptions,
+                    selectedKey = genre?.toString() ?: "all",
+                ) { selected ->
+                    genre = selected.takeUnless { it == "all" }?.toIntOrNull()
+                    viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
                 }
             }
             LazyVerticalGrid(
@@ -264,13 +270,64 @@ fun CatalogScreen(
 }
 
 @Composable
+private fun FilterDropdown(
+    label: String,
+    options: List<Pair<String, String>>,
+    selectedKey: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        FocusButton(label, onClick = { expanded = true }, selected = expanded)
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(PanelRaised),
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            option.second,
+                            color = if (option.first == selectedKey) BrandBright else TextPrimary,
+                            fontWeight = if (option.first == selectedKey) FontWeight.Bold else FontWeight.Medium,
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelect(option.first)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun NetworkCatalogScreen(viewModel: AppViewModel, networkId: Int, onOpen: (MediaItem) -> Unit) {
+    var type by remember(networkId) { mutableStateOf(MediaType.TV) }
+    Column(Modifier.fillMaxSize().background(AppBackground)) {
+        Row(
+            modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            FocusButton("TV Shows", onClick = { type = MediaType.TV }, selected = type == MediaType.TV)
+            FocusButton("Movies", onClick = { type = MediaType.MOVIE }, selected = type == MediaType.MOVIE)
+        }
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            CatalogScreen(viewModel, type, onOpen, initialNetwork = networkId)
+        }
+    }
+}
+
+@Composable
 fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
     var query by remember { mutableStateOf("") }
     var fieldFocused by remember { mutableStateOf(false) }
     var mediaType by remember { mutableStateOf<MediaType?>(null) }
     val state by viewModel.search.collectAsState()
     val focusManager = LocalFocusManager.current
-    val firstResultFocusRequester = remember { FocusRequester() }
+    val searchFocusRequester = remember { FocusRequester() }
 
     fun submitSearch() {
         viewModel.search(query, mediaType)
@@ -282,79 +339,108 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
         viewModel.search(query, mediaType)
     }
 
+    LaunchedEffect(Unit) {
+        delay(180)
+        searchFocusRequester.requestFocus()
+    }
+
     Column(modifier = Modifier.fillMaxSize().background(AppBackground)) {
         ScreenTitle("Search")
         Row(
-            modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = ScreenGutter, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .width(620.dp)
-                    .height(50.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (fieldFocused) Color.White else Panel)
-                    .border(2.dp, if (fieldFocused) Color.White else Color.White.copy(alpha = 0.1f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 15.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier.width(330.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(Icons.Rounded.Search, contentDescription = null, tint = if (fieldFocused) Color.Black else TextSecondary, modifier = Modifier.size(21.dp))
-                Spacer(Modifier.width(11.dp))
-                BasicTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    textStyle = TextStyle(color = if (fieldFocused) Color.Black else TextPrimary, fontSize = 17.sp),
-                    cursorBrush = SolidColor(if (fieldFocused) Color.Black else BrandBright),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
-                    modifier = Modifier.weight(1f).onFocusChanged { fieldFocused = it.isFocused },
-                    decorationBox = { field ->
-                        Box {
-                            if (query.isBlank()) Text("Movies and TV shows", color = if (fieldFocused) Color.DarkGray else TextSecondary, fontSize = 17.sp)
-                            field()
-                        }
-                    },
-                )
-            }
-            FocusButton("Search", onClick = ::submitSearch, enabled = query.trim().length >= 2, icon = Icons.Rounded.Search)
-        }
-        Row(modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf(null to "Everything", MediaType.MOVIE to "Movies", MediaType.TV to "TV Shows").forEach { option ->
-                FocusButton(option.second, onClick = {
-                    mediaType = option.first
-                }, selected = mediaType == option.first)
-            }
-        }
-
-        when (val value = state) {
-            LoadState.Loading -> LoadingScreen("Searching", modifier = Modifier.fillMaxWidth().weight(1f))
-            is LoadState.Failed -> ErrorScreen(value.message, modifier = Modifier.fillMaxWidth().weight(1f)) { viewModel.search(query, mediaType) }
-            is LoadState.Ready -> {
-                if (value.value.items.isEmpty()) {
-                    EmptyMessage(
-                        title = if (query.isBlank()) "Find something to watch" else "No matches",
-                        detail = if (query.isBlank()) "Search by title." else "Try another title.",
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(6.dp))
+                        .background(if (fieldFocused) Color.White else Panel)
+                        .border(2.dp, if (fieldFocused) Color.White else Color.White.copy(alpha = 0.1f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 15.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Rounded.Search, contentDescription = null, tint = if (fieldFocused) Color.Black else TextSecondary, modifier = Modifier.size(21.dp))
+                    Spacer(Modifier.width(11.dp))
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = if (fieldFocused) Color.Black else TextPrimary, fontSize = 17.sp),
+                        cursorBrush = SolidColor(if (fieldFocused) Color.Black else BrandBright),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
+                        modifier = Modifier.weight(1f).focusRequester(searchFocusRequester).onFocusChanged { fieldFocused = it.isFocused },
+                        decorationBox = { field ->
+                            Box {
+                                if (query.isBlank()) Text("Search titles", color = if (fieldFocused) Color.DarkGray else TextSecondary, fontSize = 17.sp)
+                                field()
+                            }
+                        },
                     )
-                } else {
-                    LaunchedEffect(value.value.items, fieldFocused) {
-                        if (!fieldFocused) firstResultFocusRequester.requestFocus()
-                    }
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(172.dp),
-                        contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(25.dp),
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                    ) {
-                        itemsIndexed(value.value.items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
-                            if (index >= value.value.items.lastIndex - 5) LaunchedEffect(index, value.value.page) { viewModel.loadMoreSearch() }
-                            MediaCard(
-                                item = item,
-                                onClick = { onOpen(item) },
-                                modifier = if (index == 0) Modifier.focusRequester(firstResultFocusRequester) else Modifier,
+                }
+                Text("Search in", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                listOf(null to "Everything", MediaType.MOVIE to "Movies", MediaType.TV to "TV Shows").forEach { option ->
+                    FocusButton(
+                        option.second,
+                        onClick = { mediaType = option.first },
+                        selected = mediaType == option.first,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                val suggestions = when (val current = state) {
+                    is LoadState.Ready -> current.value.items.distinctBy { it.title }.take(8)
+                    else -> emptyList()
+                }
+                if (suggestions.isNotEmpty()) {
+                    Text("Suggestions", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(suggestions, key = { "suggestion:${it.type}:${it.id}" }) { suggestion ->
+                            FocusButton(
+                                suggestion.title,
+                                onClick = {
+                                    query = suggestion.title
+                                    viewModel.search(suggestion.title, mediaType)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
                             )
+                        }
+                    }
+                }
+            }
+
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                Text(
+                    if (query.isBlank()) "Results" else "Results for \"${query.trim()}\"",
+                    color = TextPrimary,
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 10.dp),
+                )
+                when (val value = state) {
+                    LoadState.Loading -> LoadingScreen("Searching", modifier = Modifier.fillMaxSize())
+                    is LoadState.Failed -> ErrorScreen(value.message, modifier = Modifier.fillMaxSize()) { viewModel.search(query, mediaType) }
+                    is LoadState.Ready -> if (value.value.items.isEmpty()) {
+                        EmptyMessage(
+                            title = if (query.isBlank()) "Find something to watch" else "No matches",
+                            detail = if (query.isBlank()) "Start typing to see results." else "Try another title.",
+                        )
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(172.dp),
+                            contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(25.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            itemsIndexed(value.value.items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
+                                if (index >= value.value.items.lastIndex - 5) LaunchedEffect(index, value.value.page) { viewModel.loadMoreSearch() }
+                                MediaCard(
+                                    item = item,
+                                    onClick = { onOpen(item) },
+                                )
+                            }
                         }
                     }
                 }
@@ -392,7 +478,7 @@ fun DetailsScreen(
                 else -> season
             },
             trackedItem = trackedItem,
-            onToggleTracked = { viewModel.toggleTracked(value.value) },
+            onToggleFavorite = { viewModel.toggleFavorite(value.value) },
             onContinue = {
                 trackedItem?.let { viewModel.resume(it, value.value) }
                 onPlay()
@@ -416,7 +502,7 @@ private fun DetailsContent(
     details: MediaDetails,
     seasonState: LoadState<SeasonDetails>,
     trackedItem: TrackedItem?,
-    onToggleTracked: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onContinue: () -> Unit,
     onSeason: (Int) -> Unit,
     onMoviePlay: () -> Unit,
@@ -427,7 +513,10 @@ private fun DetailsContent(
     val canContinue = details.type == MediaType.TV.wireName && trackedItem?.let {
         it.status == TrackingStatus.WATCHING && it.season != null && it.episode != null
     } == true
-    LaunchedEffect(details.id, details.type) { actionFocusRequester.requestFocus() }
+    LaunchedEffect(details.id, details.type) {
+        delay(180)
+        actionFocusRequester.requestFocus()
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(AppBackground),
         contentPadding = PaddingValues(bottom = 42.dp),
@@ -480,10 +569,10 @@ private fun DetailsContent(
                             FocusButton("Play", onMoviePlay, icon = Icons.Rounded.PlayArrow, modifier = Modifier.focusRequester(actionFocusRequester))
                         }
                         FocusButton(
-                            if (trackedItem != null) "In tracker" else "Add to tracker",
-                            onToggleTracked,
-                            selected = trackedItem != null,
-                            icon = if (trackedItem != null) Icons.Rounded.Check else Icons.Rounded.Add,
+                            if (trackedItem?.isFavorite == true) "Favorited" else "Add favorite",
+                            onToggleFavorite,
+                            selected = trackedItem?.isFavorite == true,
+                            icon = if (trackedItem?.isFavorite == true) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                             modifier = if (details.type == MediaType.TV.wireName && !canContinue) Modifier.focusRequester(actionFocusRequester) else Modifier,
                         )
                     }
@@ -620,36 +709,59 @@ private fun MetadataTag(label: String, highlighted: Boolean = false) {
     )
 }
 
-private enum class TrackerFilter { ALL, CONTINUE, PLANNED, COMPLETED }
+private enum class HistoryFilter { ALL, CONTINUE, COMPLETED }
+
+private data class HistoryEntry(
+    val item: TrackedItem,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val completed: Boolean = false,
+) {
+    val key: String get() = "${item.mediaType.wireName}:${item.mediaId}:${season ?: 0}:${episode ?: 0}"
+}
 
 @Composable
-fun TrackerScreen(viewModel: AppViewModel, onResume: () -> Unit) {
+fun HistoryScreen(viewModel: AppViewModel, onResume: () -> Unit) {
     val tracked by viewModel.trackedItems.collectAsState()
-    var filter by remember { mutableStateOf(TrackerFilter.ALL) }
-    val visible = tracked.filter { item ->
+    var filter by remember { mutableStateOf(HistoryFilter.ALL) }
+    val historyItems = tracked.filter { it.status != TrackingStatus.PLANNED }
+    val entries = historyItems.flatMap { item ->
+        if (item.mediaType == MediaType.MOVIE) {
+            listOf(HistoryEntry(item, completed = item.status == TrackingStatus.COMPLETED))
+        } else {
+            val watched = item.watchedEpisodes.orEmpty().mapNotNull { key ->
+                val parts = key.split(':')
+                val season = parts.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+                val episode = parts.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+                HistoryEntry(item, season, episode, completed = true)
+            }
+            val current = if (item.season != null && item.episode != null &&
+                watched.none { it.season == item.season && it.episode == item.episode }
+            ) listOf(HistoryEntry(item, item.season, item.episode)) else emptyList()
+            watched + current
+        }
+    }.filter { entry ->
         when (filter) {
-            TrackerFilter.ALL -> true
-            TrackerFilter.CONTINUE -> item.status == TrackingStatus.WATCHING
-            TrackerFilter.PLANNED -> item.status == TrackingStatus.PLANNED
-            TrackerFilter.COMPLETED -> item.status == TrackingStatus.COMPLETED
+            HistoryFilter.ALL -> true
+            HistoryFilter.CONTINUE -> !entry.completed
+            HistoryFilter.COMPLETED -> entry.completed
         }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(AppBackground)) {
-        ScreenTitle("Tracker")
+        ScreenTitle("History")
         Row(modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TrackerFilter.entries.forEach { option ->
+            HistoryFilter.entries.forEach { option ->
                 val label = when (option) {
-                    TrackerFilter.ALL -> "All"
-                    TrackerFilter.CONTINUE -> "Continue watching"
-                    TrackerFilter.PLANNED -> "Planned"
-                    TrackerFilter.COMPLETED -> "Completed"
+                    HistoryFilter.ALL -> "All history"
+                    HistoryFilter.CONTINUE -> "Continue watching"
+                    HistoryFilter.COMPLETED -> "Completed"
                 }
                 FocusButton(label, onClick = { filter = option }, selected = filter == option)
             }
         }
-        if (visible.isEmpty()) {
-            EmptyMessage("Nothing here yet", "Titles you save or watch will appear here.")
+        if (entries.isEmpty()) {
+            EmptyMessage("No watch history", "Movies and episodes appear here automatically after you play them.")
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(242.dp),
@@ -657,15 +769,52 @@ fun TrackerScreen(viewModel: AppViewModel, onResume: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
-                items(visible, key = { "${it.mediaType.wireName}:${it.mediaId}" }) { trackedItem ->
-                    LandscapeMediaCard(
-                        item = trackedItem.toMediaItem(),
-                        progress = trackedItem.progress,
-                        onClick = {
-                            viewModel.resume(trackedItem)
-                            onResume()
-                        },
-                    )
+                items(entries, key = { it.key }) { entry ->
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val label = if (entry.item.mediaType == MediaType.TV) {
+                            "${entry.item.title}  S${entry.season} E${entry.episode}"
+                        } else entry.item.title
+                        LandscapeMediaCard(
+                            item = entry.item.toMediaItem().copy(title = label),
+                            progress = if (entry.completed) 1f else entry.item.progress,
+                            onClick = {
+                                viewModel.resumeHistory(entry.item, entry.season, entry.episode)
+                                onResume()
+                            },
+                        )
+                        FocusButton(
+                            "Remove",
+                            onClick = {
+                                if (entry.item.mediaType == MediaType.TV && entry.season != null && entry.episode != null) {
+                                    viewModel.removeEpisodeFromHistory(entry.item, entry.season, entry.episode)
+                                } else viewModel.removeFromHistory(entry.item)
+                            },
+                            icon = Icons.Rounded.Delete,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FavoritesScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
+    val tracked by viewModel.trackedItems.collectAsState()
+    val favorites = tracked.filter { it.isFavorite }
+    Column(modifier = Modifier.fillMaxSize().background(AppBackground)) {
+        ScreenTitle("Favorites")
+        if (favorites.isEmpty()) {
+            EmptyMessage("No favorites yet", "Add favorites from any movie or TV show details page.")
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(172.dp),
+                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                items(favorites, key = { "${it.mediaType.wireName}:${it.mediaId}" }) { item ->
+                    MediaCard(item.toMediaItem(), onClick = { onOpen(item.toMediaItem()) }, progress = item.progress)
                 }
             }
         }

@@ -189,6 +189,7 @@ data class TrackedItem(
     val episodeTitle: String? = null,
     val expectedRuntimeMinutes: Int? = null,
     val watchedEpisodes: List<String>? = null,
+    val favorite: Boolean? = null,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val updatedAt: Long = System.currentTimeMillis(),
@@ -198,6 +199,9 @@ data class TrackedItem(
 
     fun hasWatched(seasonNumber: Int, episodeNumber: Int): Boolean =
         watchedEpisodes.orEmpty().contains("$seasonNumber:$episodeNumber")
+
+    val isFavorite: Boolean
+        get() = favorite == true || (favorite == null && status == TrackingStatus.PLANNED)
 }
 
 data class UpdateInfo(
