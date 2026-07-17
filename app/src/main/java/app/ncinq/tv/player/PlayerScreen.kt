@@ -1,9 +1,13 @@
 package app.ncinq.tv.player
 
+import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
@@ -160,6 +164,8 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     var captionsEnabled by remember { mutableStateOf(true) }
     var seekFeedback by remember { mutableStateOf<String?>(null) }
     var seekFeedbackEpoch by remember { mutableIntStateOf(0) }
+    var sourceMismatch by remember { mutableStateOf(false) }
+    var alternateUrl by remember { mutableStateOf<String?>(null) }
 
     fun showControls() {
         controlsVisible = true
@@ -213,6 +219,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
 
     BackHandler {
         when {
+            alternateUrl != null -> onBack()
             error != null -> {
                 saveProgress()
                 onBack()
@@ -240,17 +247,20 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                         val wasPreparing = loading
                         loading = false
                         durationMs = player.duration.coerceAtLeast(0L)
+                        if (hasRuntimeMismatch(activeRequest.expectedRuntimeMinutes, durationMs)) {
+                            sourceMismatch = true
+                            error = "This server returned the wrong episode (${formatTime(durationMs)} instead of about ${activeRequest.expectedRuntimeMinutes} min)."
+                            player.pause()
+                        }
                         if (wasPreparing) showControls()
                     }
                     Player.STATE_ENDED -> {
                         if (transitionInFlight) return
                         transitionInFlight = true
-                        saveProgress(completed = true)
                         scope.launch {
                             val next = viewModel.nextPlayback(activeRequest)
-                            if (next != null) {
-                                viewModel.advanceTo(next)
-                            } else {
+                            viewModel.completeAndAdvance(activeRequest, player.duration.coerceAtLeast(0L), next)
+                            if (next == null) {
                                 finished = true
                                 transitionInFlight = false
                                 showControls()
@@ -304,6 +314,8 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         prefetched = false
         nextRequest = null
         transitionInFlight = false
+        sourceMismatch = false
+        alternateUrl = null
         stream = null
         player.stop()
         player.clearMediaItems()
@@ -336,8 +348,8 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         rootFocusRequester.requestFocus()
         while (isActive) {
             delay(500)
-            positionMs = player.currentPosition.coerceAtLeast(0L)
-            durationMs = player.duration.coerceAtLeast(0L)
+            positionMs = player.contentPosition.coerceAtLeast(0L)
+            durationMs = player.contentDuration.coerceAtLeast(0L)
             if (positionMs > 0 && player.playbackState != Player.STATE_ENDED && positionMs % 5_000 < 600) {
                 viewModel.saveProgress(activeRequest, positionMs, durationMs)
             }
@@ -383,6 +395,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             .focusRequester(rootFocusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
+                if (alternateUrl != null) return@onPreviewKeyEvent false
                 val native = event.nativeKeyEvent
                 if (native.action != KeyEvent.ACTION_DOWN || native.repeatCount > 0) return@onPreviewKeyEvent false
                 when (native.keyCode) {
@@ -449,7 +462,9 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
         )
 
-        if (controlsVisible && error == null && !loading) {
+        alternateUrl?.let { FallbackWebPlayer(it) }
+
+        if (alternateUrl == null && controlsVisible && error == null && !loading) {
             PlayerChrome(
                 request = activeRequest,
                 provider = stream?.provider,
@@ -513,11 +528,23 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     Text(message, color = TextSecondary, fontSize = 15.sp)
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (sourceMismatch) {
+                            FocusButton(
+                                "Use alternate server",
+                                onClick = {
+                                    error = null
+                                    controlsVisible = false
+                                    alternateUrl = activeRequest.alternateEmbedUrl()
+                                },
+                                modifier = Modifier.focusRequester(retryFocusRequester),
+                                selected = true,
+                            )
+                        }
                         FocusButton(
                             "Try again",
                             onClick = ::retryPlayback,
-                            modifier = Modifier.focusRequester(retryFocusRequester),
-                            selected = true,
+                            modifier = if (sourceMismatch) Modifier else Modifier.focusRequester(retryFocusRequester),
+                            selected = !sourceMismatch,
                         )
                         FocusButton("Back to details", onClick = onBack)
                     }
@@ -656,17 +683,18 @@ private fun ScrubRail(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit
                 }
             }
             .background(Color.Transparent),
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.CenterStart,
     ) {
         val fraction = playbackFraction(positionMs, durationMs)
         val railHeight = if (focused) 9.dp else 5.dp
+        val thumbSize = if (focused) 14.dp else 9.dp
         Box(Modifier.fillMaxWidth().height(railHeight).background(Color.White.copy(alpha = 0.28f))) {
             Box(Modifier.fillMaxWidth(fraction).height(railHeight).background(BrandBright))
         }
         Box(
             Modifier
-                .offset(x = (maxWidth * fraction - 7.dp).coerceIn(0.dp, maxWidth - 14.dp))
-                .size(if (focused) 14.dp else 9.dp)
+                .offset(x = (maxWidth - thumbSize) * fraction)
+                .size(thumbSize)
                 .background(Color.White, androidx.compose.foundation.shape.CircleShape)
                 .border(
                     if (focused) 2.dp else 0.dp,
@@ -680,6 +708,47 @@ private fun ScrubRail(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit
 internal fun playbackFraction(positionMs: Long, durationMs: Long): Float {
     if (durationMs <= 0) return 0f
     return (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+}
+
+internal fun hasRuntimeMismatch(expectedMinutes: Int?, actualDurationMs: Long): Boolean {
+    if (expectedMinutes == null || expectedMinutes < 30 || actualDurationMs <= 0) return false
+    return actualDurationMs < expectedMinutes * 60_000L * 0.65
+}
+
+private fun PlaybackRequest.alternateEmbedUrl(): String = when (mediaType) {
+    MediaType.MOVIE -> "https://vidlink.pro/movie/$mediaId?autoplay=true"
+    MediaType.TV -> "https://vidlink.pro/tv/$mediaId/${season ?: 1}/${episode ?: 1}?autoplay=true"
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun FallbackWebPlayer(url: String) {
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    AndroidView(
+        factory = { context ->
+            WebView(context).apply {
+                setBackgroundColor(android.graphics.Color.BLACK)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                webViewClient = WebViewClient()
+                webChromeClient = WebChromeClient()
+                isFocusable = true
+                isFocusableInTouchMode = true
+                loadUrl(url)
+                requestFocus()
+                webView = this
+            }
+        },
+        update = { if (it.url != url) it.loadUrl(url) },
+        modifier = Modifier.fillMaxSize(),
+    )
+    DisposableEffect(url) {
+        onDispose {
+            webView?.stopLoading()
+            webView?.destroy()
+        }
+    }
 }
 
 internal fun formatTime(timeMs: Long): String {

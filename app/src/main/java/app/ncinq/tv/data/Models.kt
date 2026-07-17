@@ -153,6 +153,7 @@ data class PlaybackRequest(
     val season: Int? = null,
     val episode: Int? = null,
     val episodeTitle: String? = null,
+    val expectedRuntimeMinutes: Int? = null,
     val episodeCount: Int = 0,
     val seasonCount: Int = 0,
 ) {
@@ -186,12 +187,17 @@ data class TrackedItem(
     val season: Int? = null,
     val episode: Int? = null,
     val episodeTitle: String? = null,
+    val expectedRuntimeMinutes: Int? = null,
+    val watchedEpisodes: List<String>? = null,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val updatedAt: Long = System.currentTimeMillis(),
 ) {
     val progress: Float
         get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+
+    fun hasWatched(seasonNumber: Int, episodeNumber: Int): Boolean =
+        watchedEpisodes.orEmpty().contains("$seasonNumber:$episodeNumber")
 }
 
 data class UpdateInfo(

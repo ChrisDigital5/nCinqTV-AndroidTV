@@ -72,6 +72,7 @@ import app.ncinq.tv.data.SeasonDetails
 import app.ncinq.tv.data.TrackedItem
 import app.ncinq.tv.data.TrackingStatus
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.delay
 
 private val ScreenGutter = 36.dp
 
@@ -197,7 +198,8 @@ fun CatalogScreen(
         is LoadState.Ready -> Column(Modifier.fillMaxSize().background(AppBackground)) {
             ScreenTitle(if (type == MediaType.MOVIE) "Movies" else "TV Shows")
             LazyRow(
-                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 6.dp),
+                modifier = Modifier.fillMaxWidth().background(Panel.copy(alpha = 0.58f)),
+                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 val categories = if (type == MediaType.MOVIE) {
@@ -217,18 +219,13 @@ fun CatalogScreen(
                         viewModel.loadCatalog(type, category, genre, initialNetwork, sort)
                     }, selected = sort != null)
                 }
-            }
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
                 item {
-                    FocusButton("All genres", onClick = {
+                    FocusButton("Genre: All", onClick = {
                         genre = null; viewModel.loadCatalog(type, category, null, initialNetwork, sort)
                     }, selected = genre == null)
                 }
                 items(value.value.genres, key = { it.id }) { option ->
-                    FocusButton(option.name, onClick = {
+                    FocusButton("Genre: ${option.name}", onClick = {
                         genre = option.id; viewModel.loadCatalog(type, category, option.id, initialNetwork, sort)
                     }, selected = genre == option.id)
                 }
@@ -261,6 +258,11 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
     fun submitSearch() {
         viewModel.search(query, mediaType)
         focusManager.clearFocus()
+    }
+
+    LaunchedEffect(query, mediaType) {
+        delay(300)
+        viewModel.search(query, mediaType)
     }
 
     Column(modifier = Modifier.fillMaxSize().background(AppBackground)) {
@@ -305,7 +307,6 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
             listOf(null to "Everything", MediaType.MOVIE to "Movies", MediaType.TV to "TV Shows").forEach { option ->
                 FocusButton(option.second, onClick = {
                     mediaType = option.first
-                    if (query.trim().length >= 2) viewModel.search(query, mediaType)
                 }, selected = mediaType == option.first)
             }
         }
@@ -320,7 +321,9 @@ fun SearchScreen(viewModel: AppViewModel, onOpen: (MediaItem) -> Unit) {
                         detail = if (query.isBlank()) "Search by title." else "Try another title.",
                     )
                 } else {
-                    LaunchedEffect(value.value.items) { firstResultFocusRequester.requestFocus() }
+                    LaunchedEffect(value.value.items, fieldFocused) {
+                        if (!fieldFocused) firstResultFocusRequester.requestFocus()
+                    }
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(172.dp),
                         contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 16.dp),
@@ -355,6 +358,7 @@ fun DetailsScreen(
     val detailsState by viewModel.details.collectAsState()
     val seasonState by viewModel.season.collectAsState()
     val tracked by viewModel.trackedItems.collectAsState()
+    val trackedItem = tracked.firstOrNull { it.mediaId == mediaId && it.mediaType == mediaType }
 
     val currentDetailsState = when (val value = detailsState) {
         is LoadState.Ready -> if (value.value.id == mediaId && value.value.type == mediaType.wireName) value else LoadState.Loading
@@ -370,8 +374,12 @@ fun DetailsScreen(
                 is LoadState.Ready -> if (season.value.showId == mediaId) season else LoadState.Loading
                 else -> season
             },
-            isTracked = tracked.any { it.mediaId == mediaId && it.mediaType == mediaType },
+            trackedItem = trackedItem,
             onToggleTracked = { viewModel.toggleTracked(value.value) },
+            onContinue = {
+                trackedItem?.let { viewModel.resume(it, value.value) }
+                onPlay()
+            },
             onSeason = { viewModel.loadSeason(mediaId, it) },
             onMoviePlay = {
                 viewModel.playMovie(value.value)
@@ -390,14 +398,18 @@ fun DetailsScreen(
 private fun DetailsContent(
     details: MediaDetails,
     seasonState: LoadState<SeasonDetails>,
-    isTracked: Boolean,
+    trackedItem: TrackedItem?,
     onToggleTracked: () -> Unit,
+    onContinue: () -> Unit,
     onSeason: (Int) -> Unit,
     onMoviePlay: () -> Unit,
     onEpisodePlay: (SeasonDetails, Int) -> Unit,
     onOpenRelated: (MediaItem) -> Unit,
 ) {
     val actionFocusRequester = remember(details.id, details.type) { FocusRequester() }
+    val canContinue = details.type == MediaType.TV.wireName && trackedItem?.let {
+        it.status == TrackingStatus.WATCHING && it.season != null && it.episode != null
+    } == true
     LaunchedEffect(details.id, details.type) { actionFocusRequester.requestFocus() }
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(AppBackground),
@@ -440,15 +452,23 @@ private fun DetailsContent(
                     )
                     Text(details.overview, color = Color.White.copy(alpha = 0.88f), fontSize = 15.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (canContinue) {
+                            FocusButton(
+                                "Continue S${trackedItem?.season} E${trackedItem?.episode}",
+                                onContinue,
+                                icon = Icons.Rounded.PlayArrow,
+                                modifier = Modifier.focusRequester(actionFocusRequester),
+                            )
+                        }
                         if (details.type == MediaType.MOVIE.wireName) {
                             FocusButton("Play", onMoviePlay, icon = Icons.Rounded.PlayArrow, modifier = Modifier.focusRequester(actionFocusRequester))
                         }
                         FocusButton(
-                            if (isTracked) "In tracker" else "Add to tracker",
+                            if (trackedItem != null) "In tracker" else "Add to tracker",
                             onToggleTracked,
-                            selected = isTracked,
-                            icon = if (isTracked) Icons.Rounded.Check else Icons.Rounded.Add,
-                            modifier = if (details.type == MediaType.TV.wireName) Modifier.focusRequester(actionFocusRequester) else Modifier,
+                            selected = trackedItem != null,
+                            icon = if (trackedItem != null) Icons.Rounded.Check else Icons.Rounded.Add,
+                            modifier = if (details.type == MediaType.TV.wireName && !canContinue) Modifier.focusRequester(actionFocusRequester) else Modifier,
                         )
                     }
                 }
@@ -485,7 +505,14 @@ private fun DetailsContent(
                             horizontalArrangement = Arrangement.spacedBy(20.dp),
                         ) {
                             items(seasonState.value.episodes, key = { it.number }) { episode ->
-                                EpisodeCard(episode) { onEpisodePlay(seasonState.value, episode.number) }
+                                val isCurrent = trackedItem?.let {
+                                    it.season == seasonState.value.seasonNumber && it.episode == episode.number
+                                } == true
+                                EpisodeCard(
+                                    episode = episode,
+                                    watched = trackedItem?.hasWatched(seasonState.value.seasonNumber, episode.number) == true,
+                                    progress = if (isCurrent) trackedItem?.progress ?: 0f else 0f,
+                                ) { onEpisodePlay(seasonState.value, episode.number) }
                             }
                         }
                     }
@@ -525,7 +552,7 @@ private fun DetailsContent(
 }
 
 @Composable
-private fun EpisodeCard(episode: Episode, onClick: () -> Unit) {
+private fun EpisodeCard(episode: Episode, watched: Boolean, progress: Float, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val scale = if (focused) 1.045f else 1f
     Column(
@@ -536,10 +563,24 @@ private fun EpisodeCard(episode: Episode, onClick: () -> Unit) {
                 .border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color.White.copy(alpha = 0.08f), RoundedCornerShape(6.dp)),
         ) {
             AsyncImage(episode.stillUrl, episode.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            if (progress > 0f) {
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.3f))) {
+                    Box(Modifier.fillMaxWidth(progress).height(4.dp).background(BrandBright))
+                }
+            }
             Box(
                 Modifier.align(Alignment.BottomStart).background(Color.Black.copy(alpha = 0.78f)).padding(horizontal = 9.dp, vertical = 5.dp),
             ) {
                 Text("Episode ${episode.number}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            if (watched) {
+                Text(
+                    "Watched",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.TopEnd).background(Brand.copy(alpha = 0.92f)).padding(horizontal = 8.dp, vertical = 5.dp),
+                )
             }
         }
         Spacer(Modifier.height(8.dp))

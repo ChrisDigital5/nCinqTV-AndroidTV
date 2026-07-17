@@ -25,4 +25,11 @@ class PlayerRecoveryTest {
         assertEquals("05:32", formatTime(332_000))
         assertEquals("1:38:51", formatTime(5_931_000))
     }
+
+    @Test
+    fun `runtime validation catches a short mismatched episode`() {
+        assertTrue(hasRuntimeMismatch(68, 24L * 60_000L))
+        assertFalse(hasRuntimeMismatch(68, 67L * 60_000L))
+        assertFalse(hasRuntimeMismatch(null, 24L * 60_000L))
+    }
 }

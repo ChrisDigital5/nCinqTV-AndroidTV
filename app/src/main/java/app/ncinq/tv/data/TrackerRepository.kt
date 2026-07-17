@@ -54,9 +54,18 @@ class TrackerRepository(private val context: Context) {
         completed: Boolean,
     ) {
         mutate { current ->
+            val existing = current.firstOrNull {
+                it.mediaId == request.mediaId && it.mediaType == request.mediaType
+            }
             val status = when {
                 completed && request.mediaType == MediaType.MOVIE -> TrackingStatus.COMPLETED
                 else -> TrackingStatus.WATCHING
+            }
+            val watchedEpisodes = existing?.watchedEpisodes.orEmpty().toMutableSet()
+            if (request.mediaType == MediaType.TV &&
+                (completed || (durationMs > 0 && positionMs >= durationMs * 0.9))
+            ) {
+                watchedEpisodes += "${request.season ?: 1}:${request.episode ?: 1}"
             }
             val updated = TrackedItem(
                 mediaId = request.mediaId,
@@ -68,6 +77,8 @@ class TrackerRepository(private val context: Context) {
                 season = request.season,
                 episode = request.episode,
                 episodeTitle = request.episodeTitle,
+                expectedRuntimeMinutes = request.expectedRuntimeMinutes,
+                watchedEpisodes = watchedEpisodes.toList(),
                 positionMs = if (completed) 0 else positionMs.coerceAtLeast(0),
                 durationMs = durationMs.coerceAtLeast(0),
                 updatedAt = System.currentTimeMillis(),

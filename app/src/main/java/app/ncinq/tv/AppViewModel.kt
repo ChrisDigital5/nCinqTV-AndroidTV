@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -79,6 +80,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var searchType: MediaType? = null
     private var detailsJob: Job? = null
     private var seasonJob: Job? = null
+    private var searchJob: Job? = null
 
     init {
         loadHome()
@@ -128,13 +130,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun search(query: String, type: MediaType? = null) {
         val normalized = query.trim()
+        searchJob?.cancel()
         if (normalized.length < 2) {
             _search.value = LoadState.Ready(SearchResults())
             return
         }
         searchQuery = normalized
         searchType = type
-        viewModelScope.launch {
+        searchJob = viewModelScope.launch {
             _search.value = LoadState.Loading
             _search.value = runLoad { catalogRepository.search(normalized, type, 1) }
         }
@@ -203,21 +206,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             season = season.seasonNumber,
             episode = episode.number,
             episodeTitle = episode.name,
+            expectedRuntimeMinutes = episode.runtimeMinutes,
             episodeCount = season.episodes.size,
             seasonCount = details.seasonCount,
         )
     }
 
-    fun resume(item: TrackedItem) {
+    fun resume(item: TrackedItem, details: MediaDetails? = null) {
         _activePlayback.value = PlaybackRequest(
             mediaId = item.mediaId,
             mediaType = item.mediaType,
             title = item.title,
             posterUrl = item.posterUrl,
             backdropUrl = item.backdropUrl,
+            imdbId = details?.imdbId,
+            releaseYear = details?.year,
             season = item.season,
             episode = item.episode,
             episodeTitle = item.episodeTitle,
+            expectedRuntimeMinutes = item.expectedRuntimeMinutes,
+            seasonCount = details?.seasonCount ?: 0,
         )
     }
 
@@ -272,6 +280,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 season = seasonNumber,
                 episode = nextEpisode.number,
                 episodeTitle = nextEpisode.name,
+                expectedRuntimeMinutes = nextEpisode.runtimeMinutes,
                 backdropUrl = nextEpisode.stillUrl ?: current.backdropUrl,
                 episodeCount = season.episodes.size,
                 seasonCount = seasonCount,
@@ -296,6 +305,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 season = seasonNumber,
                 episode = previous.number,
                 episodeTitle = previous.name,
+                expectedRuntimeMinutes = previous.runtimeMinutes,
                 backdropUrl = previous.stillUrl ?: current.backdropUrl,
                 episodeCount = season.episodes.size,
                 seasonCount = current.seasonCount.takeIf { it > 0 } ?: details?.seasonCount ?: currentSeason,
@@ -313,6 +323,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun advanceTo(next: PlaybackRequest) {
         _activePlayback.value = next
+        viewModelScope.launch(Dispatchers.IO) {
+            trackerRepository.saveProgress(next, 0L, 0L, completed = false)
+        }
+    }
+
+    suspend fun completeAndAdvance(
+        current: PlaybackRequest,
+        durationMs: Long,
+        next: PlaybackRequest?,
+    ) {
+        withContext(Dispatchers.IO) {
+            trackerRepository.saveProgress(current, durationMs, durationMs, completed = true)
+            if (next != null) trackerRepository.saveProgress(next, 0L, 0L, completed = false)
+        }
+        if (next != null) _activePlayback.value = next
     }
 
     fun saveProgress(request: PlaybackRequest, positionMs: Long, durationMs: Long, completed: Boolean = false) {
