@@ -136,6 +136,9 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             )
             .build()
             .apply {
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setPreferredAudioLanguages("en", "eng")
+                    .build()
                 playWhenReady = true
                 repeatMode = Player.REPEAT_MODE_OFF
             }
