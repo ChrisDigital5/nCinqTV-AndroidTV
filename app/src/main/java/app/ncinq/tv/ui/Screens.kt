@@ -278,11 +278,28 @@ private fun FilterDropdown(
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var restoreButtonFocus by remember { mutableStateOf(false) }
+    val buttonFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(expanded, restoreButtonFocus) {
+        if (!expanded && restoreButtonFocus) {
+            delay(60)
+            buttonFocusRequester.requestFocus()
+            restoreButtonFocus = false
+        }
+    }
     Box {
-        FocusButton(label, onClick = { expanded = true }, selected = expanded)
+        FocusButton(
+            label,
+            onClick = { expanded = true },
+            selected = expanded,
+            modifier = Modifier.focusRequester(buttonFocusRequester),
+        )
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
+            onDismissRequest = {
+                restoreButtonFocus = true
+                expanded = false
+            },
             modifier = Modifier.background(PanelRaised),
         ) {
             options.forEach { option ->
@@ -295,6 +312,7 @@ private fun FilterDropdown(
                         )
                     },
                     onClick = {
+                        restoreButtonFocus = true
                         expanded = false
                         onSelect(option.first)
                     },
@@ -307,7 +325,11 @@ private fun FilterDropdown(
 @Composable
 fun NetworkCatalogScreen(viewModel: AppViewModel, networkId: Int, onOpen: (MediaItem) -> Unit) {
     var type by remember(networkId) { mutableStateOf(MediaType.TV) }
+    val homeState by viewModel.home.collectAsState()
+    val network = (homeState as? LoadState.Ready)?.value?.networks?.firstOrNull { it.id == networkId }
+        ?: NetworkItem(id = networkId, name = "Network")
     Column(Modifier.fillMaxSize().background(AppBackground)) {
+        NetworkBanner(listOf(network), Modifier.padding(start = ScreenGutter, end = ScreenGutter, top = 18.dp))
         Row(
             modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -527,7 +549,7 @@ private fun DetailsContent(
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         item(key = "header") {
-            Box(Modifier.fillMaxWidth().height(500.dp)) {
+            Box(Modifier.fillMaxWidth().height(520.dp)) {
                 AsyncImage(details.backdropUrl, details.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 Box(
                     Modifier.fillMaxSize().background(
@@ -542,12 +564,21 @@ private fun DetailsContent(
                     Modifier.fillMaxWidth().height(70.dp).align(Alignment.BottomCenter)
                         .background(Brush.verticalGradient(listOf(Color.Transparent, AppBackground))),
                 )
+                if (details.networks.isNotEmpty()) {
+                    NetworkBanner(
+                        details.networks,
+                        Modifier.align(Alignment.TopEnd).fillMaxWidth(0.34f)
+                            .padding(top = 28.dp, end = ScreenGutter),
+                    )
+                }
                 Column(
-                    modifier = Modifier.align(Alignment.TopStart).padding(start = ScreenGutter, top = 28.dp, end = 24.dp).width(760.dp),
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .padding(start = ScreenGutter, top = 28.dp, end = 24.dp)
+                        .fillMaxWidth(0.62f),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(details.title, color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2)
-                    if (details.tagline.isNotBlank()) Text(details.tagline, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Text(details.title, color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.ExtraBold, maxLines = 3)
+                    if (details.tagline.isNotBlank()) Text(details.tagline, color = Color.White.copy(alpha = 0.8f), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 2)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         details.rating.takeIf { it > 0 }?.let { MetadataTag("%.1f rating".format(it), highlighted = true) }
                         details.year?.let { MetadataTag(it.toString()) }
@@ -559,7 +590,7 @@ private fun DetailsContent(
                         }
                         details.genres.firstOrNull()?.let { MetadataTag(it) }
                     }
-                    Text(details.overview, color = Color.White.copy(alpha = 0.88f), fontSize = 15.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    Text(details.overview, color = Color.White.copy(alpha = 0.92f), fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         if (canContinue) {
                             FocusButton(
@@ -656,6 +687,45 @@ private fun DetailsContent(
         }
         if (details.recommendations.isNotEmpty()) item(key = "recommendations") {
             MediaShelf(app.ncinq.tv.data.MediaRow("More like this", details.recommendations), onOpenRelated)
+        }
+    }
+}
+
+@Composable
+private fun NetworkBanner(networks: List<NetworkItem>, modifier: Modifier = Modifier) {
+    val visibleNetworks = networks.take(3)
+    Box(
+        modifier = modifier.fillMaxWidth().height(104.dp).clip(RoundedCornerShape(8.dp))
+            .background(Brush.horizontalGradient(listOf(Brand, BrandBright, Color(0xFFFF8A62))))
+            .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(8.dp)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("NOW STREAMING ON", color = Color.White.copy(alpha = 0.82f), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    visibleNetworks.joinToString("  •  ") { it.name },
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            visibleNetworks.forEach { network ->
+                network.logoUrl?.let { logo ->
+                    Box(
+                        Modifier.width(118.dp).height(60.dp).clip(RoundedCornerShape(6.dp))
+                            .background(Color.White.copy(alpha = 0.96f)).padding(10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AsyncImage(logo, network.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    }
+                }
+            }
         }
     }
 }

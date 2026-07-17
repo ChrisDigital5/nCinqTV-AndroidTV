@@ -82,6 +82,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var detailsJob: Job? = null
     private var seasonJob: Job? = null
     private var searchJob: Job? = null
+    private var catalogJob: Job? = null
 
     init {
         loadHome()
@@ -104,9 +105,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         sort: String? = null,
         year: Int? = null,
     ) {
+        val previousQuery = catalogQuery
+        val keepCurrentPage = _catalog.value is LoadState.Ready &&
+            previousQuery.type == type && previousQuery.network == network
         catalogQuery = CatalogQuery(type, category, genre, network, sort, year)
-        viewModelScope.launch {
-            _catalog.value = LoadState.Loading
+        catalogJob?.cancel()
+        catalogJob = viewModelScope.launch {
+            if (!keepCurrentPage) _catalog.value = LoadState.Loading
             _catalog.value = runLoad { catalogRepository.catalog(type, category, 1, genre, network, sort, year) }
         }
     }
