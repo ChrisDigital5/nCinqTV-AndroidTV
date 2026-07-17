@@ -320,16 +320,6 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         player.stop()
         player.clearMediaItems()
 
-        if (activeRequest.usesAlternateSourceOverride()) {
-            // The direct provider currently maps this live-action episode to the
-            // 22-minute animated series. Route the known-bad mapping directly to
-            // the TMDB-addressed alternate source instead of caching bad media.
-            loading = false
-            controlsVisible = false
-            alternateUrl = activeRequest.alternateEmbedUrl()
-            return@LaunchedEffect
-        }
-
         runCatching {
             viewModel.resolveStream(activeRequest, force = reloadKey > 0)
         }.onSuccess { resolved ->
@@ -725,9 +715,6 @@ internal fun hasRuntimeMismatch(expectedMinutes: Int?, actualDurationMs: Long): 
     if (expectedMinutes == null || expectedMinutes < 30 || actualDurationMs <= 0) return false
     return actualDurationMs < expectedMinutes * 60_000L * 0.65
 }
-
-internal fun PlaybackRequest.usesAlternateSourceOverride(): Boolean =
-    mediaType == MediaType.TV && mediaId == 82452 && season == 2 && episode == 1
 
 private fun PlaybackRequest.alternateEmbedUrl(): String = when (mediaType) {
     MediaType.MOVIE -> "https://vidlink.pro/movie/$mediaId?autoplay=true"

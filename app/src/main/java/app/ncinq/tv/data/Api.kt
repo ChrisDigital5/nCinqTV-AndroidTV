@@ -83,6 +83,7 @@ object ApiClient {
 }
 
 class CatalogRepository(private val api: NCinqApi = ApiClient.service) {
+    private val vixsrcEpisodeResolver = VixsrcEpisodeResolver()
     suspend fun home() = api.home()
     suspend fun catalog(
         type: MediaType,
@@ -100,6 +101,9 @@ class CatalogRepository(private val api: NCinqApi = ApiClient.service) {
     suspend fun update(versionCode: Int) = api.update(versionCode)
 
     suspend fun resolve(request: PlaybackRequest): StreamResult {
+        if (request.requiresVerifiedVixsrcSource()) {
+            vixsrcEpisodeResolver.resolve(request)?.let { return it }
+        }
         val response = api.stream(request.toStreamRequest())
         return response.stream?.takeIf { response.success && it.url.isNotBlank() }
             ?: throw IllegalStateException(response.error ?: "No direct stream is available for this title.")

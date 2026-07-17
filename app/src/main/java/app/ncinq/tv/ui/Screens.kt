@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -207,6 +208,7 @@ fun CatalogScreen(
     type: MediaType,
     onOpen: (MediaItem) -> Unit,
     initialNetwork: Int? = null,
+    gridHeader: (@Composable () -> Unit)? = null,
 ) {
     var category by remember(type, initialNetwork) { mutableStateOf("popular") }
     var genre by remember(type, initialNetwork) { mutableStateOf<Int?>(null) }
@@ -255,14 +257,25 @@ fun CatalogScreen(
                 }
             }
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(172.dp),
+                columns = GridCells.Fixed(5),
                 contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                verticalArrangement = Arrangement.spacedBy(25.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
+                gridHeader?.let { header ->
+                    item(key = "grid-header", span = { GridItemSpan(maxLineSpan) }) { header() }
+                }
                 itemsIndexed(value.value.items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
                     if (index >= value.value.items.lastIndex - 5) LaunchedEffect(index, value.value.page) { viewModel.loadMoreCatalog() }
-                    MediaCard(item = item, onClick = { onOpen(item) })
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        MediaCard(
+                            item = item,
+                            onClick = { onOpen(item) },
+                            cardWidth = 132.dp,
+                            posterHeight = 198.dp,
+                            focusedScale = 1.05f,
+                        )
+                    }
                 }
                 if (loadingMore) item { CircularProgressIndicator(color = BrandBright, modifier = Modifier.padding(28.dp)) }
             }
@@ -325,20 +338,35 @@ private fun FilterDropdown(
 @Composable
 fun NetworkCatalogScreen(viewModel: AppViewModel, networkId: Int, onOpen: (MediaItem) -> Unit) {
     var type by remember(networkId) { mutableStateOf(MediaType.TV) }
+    val firstToggleFocusRequester = remember(networkId) { FocusRequester() }
     val homeState by viewModel.home.collectAsState()
     val network = (homeState as? LoadState.Ready)?.value?.networks?.firstOrNull { it.id == networkId }
         ?: NetworkItem(id = networkId, name = "Network")
+    LaunchedEffect(networkId) {
+        delay(120)
+        firstToggleFocusRequester.requestFocus()
+    }
     Column(Modifier.fillMaxSize().background(AppBackground)) {
-        NetworkBanner(listOf(network), Modifier.padding(start = ScreenGutter, end = ScreenGutter, top = 18.dp))
         Row(
             modifier = Modifier.padding(horizontal = ScreenGutter, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            FocusButton("TV Shows", onClick = { type = MediaType.TV }, selected = type == MediaType.TV)
+            FocusButton(
+                "TV Shows",
+                onClick = { type = MediaType.TV },
+                selected = type == MediaType.TV,
+                modifier = Modifier.focusRequester(firstToggleFocusRequester),
+            )
             FocusButton("Movies", onClick = { type = MediaType.MOVIE }, selected = type == MediaType.MOVIE)
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
-            CatalogScreen(viewModel, type, onOpen, initialNetwork = networkId)
+            CatalogScreen(
+                viewModel,
+                type,
+                onOpen,
+                initialNetwork = networkId,
+                gridHeader = { NetworkBanner(listOf(network), Modifier.padding(vertical = 8.dp)) },
+            )
         }
     }
 }

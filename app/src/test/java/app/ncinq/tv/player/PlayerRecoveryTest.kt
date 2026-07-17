@@ -1,8 +1,6 @@
 package app.ncinq.tv.player
 
 import androidx.media3.common.PlaybackException
-import app.ncinq.tv.data.MediaType
-import app.ncinq.tv.data.PlaybackRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,17 +33,4 @@ class PlayerRecoveryTest {
         assertFalse(hasRuntimeMismatch(null, 24L * 60_000L))
     }
 
-    @Test
-    fun `live action Avatar S2E1 bypasses the mismatched animated source`() {
-        val affected = PlaybackRequest(
-            mediaId = 82452,
-            mediaType = MediaType.TV,
-            title = "Avatar: The Last Airbender",
-            season = 2,
-            episode = 1,
-        )
-        assertTrue(affected.usesAlternateSourceOverride())
-        assertFalse(affected.copy(episode = 2).usesAlternateSourceOverride())
-        assertFalse(affected.copy(mediaId = 246).usesAlternateSourceOverride())
-    }
 }

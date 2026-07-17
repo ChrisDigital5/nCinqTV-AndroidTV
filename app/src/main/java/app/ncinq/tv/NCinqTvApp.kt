@@ -97,7 +97,9 @@ private object Routes {
 private data class Destination(val route: String, val label: String, val icon: ImageVector)
 
 private class NavigationRailFocusGate {
-    var acceptsFocus by mutableStateOf(true)
+    var allowEntry by mutableStateOf(false)
+    var railHasFocus by mutableStateOf(false)
+    val acceptsFocus: Boolean get() = allowEntry || railHasFocus
 }
 
 @Composable
@@ -151,17 +153,17 @@ private fun AppNavHost(
                 val direction = when (event.key) {
                     Key.DirectionUp -> FocusDirection.Up
                     Key.DirectionDown -> FocusDirection.Down
+                    Key.DirectionLeft -> FocusDirection.Left
                     else -> return@onPreviewKeyEvent false
                 }
                 if (event.type == KeyEventType.KeyDown) {
-                    // A vertical search must never escape the page and choose the rail as
-                    // a spatial fallback. Left/right navigation remains untouched, so the
-                    // rail is still reachable from the leftmost item on the page.
-                    railFocusGate.acceptsFocus = false
+                    // The rail is not a focus candidate during loading, clicks, or vertical
+                    // traversal. It is exposed only for an explicit Left move from content.
+                    railFocusGate.allowEntry = direction == FocusDirection.Left
                     try {
                         focusManager.moveFocus(direction)
                     } finally {
-                        railFocusGate.acceptsFocus = true
+                        railFocusGate.allowEntry = false
                     }
                 }
                 true
@@ -244,7 +246,10 @@ private fun NavigationRail(
             .fillMaxHeight()
             .background(Color(0xFF0D0E11))
             .border(width = 0.5.dp, color = Color.White.copy(alpha = 0.08f))
-            .onFocusChanged { expanded = it.hasFocus }
+            .onFocusChanged {
+                expanded = it.hasFocus
+                focusGate.railHasFocus = it.hasFocus
+            }
             .padding(start = 48.dp, end = 10.dp, top = OverscanVertical, bottom = OverscanVertical),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
