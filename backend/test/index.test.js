@@ -64,7 +64,7 @@ test('maps semantic tags to Android version codes', () => {
 
 test('update endpoint reports and routes to the current APK', async () => {
   const fakeFetch = async url => {
-    assert.match(String(url), /releases\/latest$/);
+    assert.match(String(url), /releases\/latest\?androidUpdater=3$/);
     return Response.json({
       tag_name: 'v1.1.0',
       body: 'Faster playback',

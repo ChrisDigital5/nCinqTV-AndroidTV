@@ -240,13 +240,13 @@ function versionCodeFromTag(tagName) {
 }
 
 async function latestRelease(env, fetchFn) {
-  const response = await fetchFn(`https://api.github.com/repos/${env.GITHUB_REPO}/releases/latest`, {
+  const response = await fetchFn(`https://api.github.com/repos/${env.GITHUB_REPO}/releases/latest?androidUpdater=3`, {
     headers: {
       accept: 'application/vnd.github+json',
       'user-agent': 'ncinqtv-android-updater',
       'x-github-api-version': '2026-03-10',
     },
-    cf: { cacheEverything: true, cacheTtl: 300 },
+    cf: { cacheEverything: true, cacheTtl: 30 },
   });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`GitHub release request failed with ${response.status}`);
