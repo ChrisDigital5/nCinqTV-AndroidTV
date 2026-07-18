@@ -243,6 +243,9 @@ fun MediaShelf(
     upFocusRequester: FocusRequester? = null,
     downFocusRequester: FocusRequester? = null,
 ) {
+    val cardFocusRequesters = remember(row.title, row.items.map { it.id to it.type }) {
+        List(row.items.size) { FocusRequester() }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
         Text(
             text = row.title,
@@ -258,8 +261,11 @@ fun MediaShelf(
             items(row.items, key = { "${it.type}:${it.id}" }) { item ->
                 val index = row.items.indexOf(item)
                 val focusModifier = Modifier
+                    .focusRequester(cardFocusRequesters[index])
                     .then(if (index == 0 && rowFocusRequester != null) Modifier.focusRequester(rowFocusRequester) else Modifier)
                     .focusProperties {
+                        if (index > 0) left = cardFocusRequesters[index - 1]
+                        if (index < cardFocusRequesters.lastIndex) right = cardFocusRequesters[index + 1]
                         upFocusRequester?.let { up = it }
                         downFocusRequester?.let { down = it }
                     }

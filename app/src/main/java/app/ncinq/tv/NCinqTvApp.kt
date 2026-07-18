@@ -179,18 +179,15 @@ private fun AppNavHost(
         modifier = Modifier
             .fillMaxSize()
             .onPreviewKeyEvent { event ->
-                val direction = when (event.key) {
-                    Key.DirectionUp -> FocusDirection.Up
-                    Key.DirectionDown -> FocusDirection.Down
-                    Key.DirectionLeft -> FocusDirection.Left
-                    else -> return@onPreviewKeyEvent false
-                }
+                // Let each shelf and LazyColumn handle vertical traversal. Intercepting Up/Down
+                // here bypassed their explicit neighbors and made personalized rows get skipped.
+                if (event.key != Key.DirectionLeft) return@onPreviewKeyEvent false
                 if (event.type == KeyEventType.KeyDown) {
                     // The rail is not a focus candidate during loading, clicks, or vertical
                     // traversal. It is exposed only for an explicit Left move from content.
-                    railFocusGate.allowEntry = direction == FocusDirection.Left
+                    railFocusGate.allowEntry = true
                     try {
-                        focusManager.moveFocus(direction)
+                        focusManager.moveFocus(FocusDirection.Left)
                     } finally {
                         railFocusGate.allowEntry = false
                     }
