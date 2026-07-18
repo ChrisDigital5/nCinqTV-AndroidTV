@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -65,6 +67,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -107,35 +114,30 @@ fun HomeScreen(
             val sectionFocus = remember(feed.rows.map { it.title }, feed.networks.isNotEmpty()) {
                 List(sectionCount) { FocusRequester() }
             }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().background(AppBackground),
+            Column(
+                modifier = Modifier.fillMaxSize().background(AppBackground)
+                    .verticalScroll(rememberScrollState()).padding(bottom = OverscanVertical),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
-                contentPadding = PaddingValues(bottom = OverscanVertical),
             ) {
                 featuredItem?.let { featured ->
-                    item(key = "featured") {
-                        FeaturedHero(
-                            featured = featured,
-                            onPlay = { onPlay(featured) },
-                            onOpen = { onOpen(featured) },
-                            focusRequester = sectionFocus[0],
-                            downFocusRequester = sectionFocus.getOrNull(1),
-                        )
-                    }
+                    FeaturedHero(
+                        featured = featured,
+                        onPlay = { onPlay(featured) },
+                        onOpen = { onOpen(featured) },
+                        focusRequester = sectionFocus[0],
+                        downFocusRequester = sectionFocus.getOrNull(1),
+                    )
                 }
                 if (feed.networks.isNotEmpty()) {
-                    item(key = "networks") {
-                        NetworkShelf(
-                            feed.networks,
-                            onNetwork,
-                            focusRequester = sectionFocus[1],
-                            upFocusRequester = sectionFocus[0],
-                            downFocusRequester = sectionFocus.getOrNull(2),
-                        )
-                    }
+                    NetworkShelf(
+                        feed.networks,
+                        onNetwork,
+                        focusRequester = sectionFocus[1],
+                        upFocusRequester = sectionFocus[0],
+                        downFocusRequester = sectionFocus.getOrNull(2),
+                    )
                 }
-                items(feed.rows.size, key = { feed.rows[it].title }) { rowIndex ->
-                    val row = feed.rows[rowIndex]
+                feed.rows.forEachIndexed { rowIndex, row ->
                     val sectionIndex = 1 + (if (feed.networks.isNotEmpty()) 1 else 0) + rowIndex
                     MediaShelf(
                         row = row,
@@ -173,6 +175,14 @@ private fun NetworkShelf(
                         .focusProperties {
                             up = upFocusRequester
                             downFocusRequester?.let { down = it }
+                        }
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (event.key) {
+                                Key.DirectionUp -> upFocusRequester.requestFocus()
+                                Key.DirectionDown -> downFocusRequester?.requestFocus() ?: false
+                                else -> false
+                            }
                         }
                         .onFocusChanged { focused = it.isFocused }.clickable { onNetwork(network) },
                     contentAlignment = Alignment.Center,

@@ -36,6 +36,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -243,9 +248,7 @@ fun MediaShelf(
     upFocusRequester: FocusRequester? = null,
     downFocusRequester: FocusRequester? = null,
 ) {
-    val cardFocusRequesters = remember(row.title, row.items.map { it.id to it.type }) {
-        List(row.items.size) { FocusRequester() }
-    }
+    var lastFocusedIndex by remember(row.title) { mutableStateOf(0) }
     Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
         Text(
             text = row.title,
@@ -261,15 +264,28 @@ fun MediaShelf(
             items(row.items, key = { "${it.type}:${it.id}" }) { item ->
                 val index = row.items.indexOf(item)
                 val focusModifier = Modifier
-                    .focusRequester(cardFocusRequesters[index])
-                    .then(if (index == 0 && rowFocusRequester != null) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                    .then(if (index == lastFocusedIndex && rowFocusRequester != null) Modifier.focusRequester(rowFocusRequester) else Modifier)
                     .focusProperties {
-                        if (index > 0) left = cardFocusRequesters[index - 1]
-                        if (index < cardFocusRequesters.lastIndex) right = cardFocusRequesters[index + 1]
                         upFocusRequester?.let { up = it }
                         downFocusRequester?.let { down = it }
                     }
-                LandscapeMediaCard(item = item, modifier = focusModifier, onClick = { onOpen(item) }, onFocus = onFocus)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.DirectionUp -> upFocusRequester?.requestFocus() ?: false
+                            Key.DirectionDown -> downFocusRequester?.requestFocus() ?: false
+                            else -> false
+                        }
+                    }
+                LandscapeMediaCard(
+                    item = item,
+                    modifier = focusModifier,
+                    onClick = { onOpen(item) },
+                    onFocus = {
+                        lastFocusedIndex = index
+                        onFocus(it)
+                    },
+                )
             }
         }
     }
