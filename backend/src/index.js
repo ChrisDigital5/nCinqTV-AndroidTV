@@ -170,10 +170,13 @@ async function details(type, id, env, fetchFn) {
   if (type !== 'movie' && type !== 'tv') return json({ error: 'Invalid media type' }, 400);
   const payload = await tmdb(`/${type}/${id}`, env, {
     append_to_response: type === 'tv'
-      ? 'external_ids,credits,recommendations,content_ratings'
-      : 'external_ids,credits,recommendations,release_dates',
+      ? 'external_ids,credits,recommendations,content_ratings,videos'
+      : 'external_ids,credits,recommendations,release_dates,videos',
   }, fetchFn);
   const media = normalizeMedia(payload, type);
+  const trailer = (payload.videos?.results || []).find(video =>
+    video.site === 'YouTube' && video.type === 'Trailer' && video.official
+  ) || (payload.videos?.results || []).find(video => video.site === 'YouTube' && video.type === 'Trailer');
   const certification = type === 'tv'
     ? payload.content_ratings?.results?.find(item => item.iso_3166_1 === 'US')?.rating
     : payload.release_dates?.results?.find(item => item.iso_3166_1 === 'US')?.release_dates
@@ -181,6 +184,7 @@ async function details(type, id, env, fetchFn) {
   return json({
     ...media,
     imdbId: payload.external_ids?.imdb_id || payload.imdb_id || null,
+    trailerUrl: trailer?.key ? `https://www.youtube.com/watch?v=${trailer.key}` : null,
     runtimeMinutes: payload.runtime || payload.episode_run_time?.[0] || null,
     tagline: payload.tagline || '',
     status: payload.status || '',

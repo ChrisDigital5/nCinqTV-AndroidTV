@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.stateIn
 
 private val Context.trackerDataStore by preferencesDataStore(name = "tracker")
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class TrackerRepository(private val context: Context) {
     private val gson = Gson()
     private val activeProfileId = MutableStateFlow("main")

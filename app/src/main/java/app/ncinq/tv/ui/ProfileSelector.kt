@@ -74,6 +74,7 @@ fun ProfileSelector(
     onSelect: (ViewerProfile) -> Unit,
     onSave: (ViewerProfile) -> Unit,
     onDelete: (ViewerProfile) -> Unit,
+    onMove: (ViewerProfile, Int) -> Unit,
 ) {
     var managing by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<ViewerProfile?>(null) }
@@ -96,6 +97,9 @@ fun ProfileSelector(
             onCancel = { editing = null; creating = false },
             onSave = { onSave(it); editing = null; creating = false },
             onDelete = { editing?.let(onDelete); editing = null; creating = false },
+            canMoveLeft = editing?.let { profiles.indexOf(it) > 0 } == true,
+            canMoveRight = editing?.let { profiles.indexOf(it) in 0 until profiles.lastIndex } == true,
+            onMove = { offset -> editing?.let { onMove(it, offset) } },
         )
         return
     }
@@ -134,6 +138,9 @@ private fun ProfileEditor(
     onCancel: () -> Unit,
     onSave: (ViewerProfile) -> Unit,
     onDelete: () -> Unit,
+    canMoveLeft: Boolean,
+    canMoveRight: Boolean,
+    onMove: (Int) -> Unit,
 ) {
     var name by remember(profile) { mutableStateOf(profile?.name.orEmpty()) }
     var avatar by remember(profile) { mutableStateOf(profile?.avatar ?: "face") }
@@ -202,6 +209,12 @@ private fun ProfileEditor(
             }, selected = true, enabled = name.isNotBlank() && pinValid)
             FocusButton("Cancel", onClick = onCancel)
             if (canDelete) FocusButton("Delete profile", onClick = onDelete)
+        }
+        if (profile != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FocusButton("Move left", onClick = { onMove(-1) }, enabled = canMoveLeft)
+                FocusButton("Move right", onClick = { onMove(1) }, enabled = canMoveRight)
+            }
         }
     }
 }

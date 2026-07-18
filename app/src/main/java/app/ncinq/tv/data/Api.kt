@@ -65,7 +65,7 @@ object ApiClient {
         .addInterceptor { chain ->
             val request = chain.request()
             val versioned = if (request.method == "GET") {
-                request.newBuilder().url(request.url.newBuilder().addQueryParameter("tvApi", "2").build()).build()
+                request.newBuilder().url(request.url.newBuilder().addQueryParameter("tvApi", "3").build()).build()
             } else request
             chain.proceed(versioned)
         }

@@ -77,6 +77,7 @@ data class MediaDetails(
     val rating: Double = 0.0,
     val year: Int? = null,
     val imdbId: String? = null,
+    val trailerUrl: String? = null,
     val runtimeMinutes: Int? = null,
     val tagline: String = "",
     val status: String = "",

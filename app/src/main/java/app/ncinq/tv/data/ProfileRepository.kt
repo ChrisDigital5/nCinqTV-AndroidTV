@@ -55,6 +55,16 @@ class ProfileRepository(context: Context) {
         return remaining
     }
 
+    fun move(profileId: String, offset: Int): List<ViewerProfile> {
+        val stored = profiles().toMutableList()
+        val from = stored.indexOfFirst { it.id == profileId }
+        if (from < 0) return stored
+        val to = (from + offset).coerceIn(0, stored.lastIndex)
+        if (from != to) stored.add(to, stored.removeAt(from))
+        persist(stored)
+        return stored
+    }
+
     private fun persist(profiles: List<ViewerProfile>) {
         preferences.edit().putString("profiles", gson.toJson(profiles)).apply()
     }

@@ -1,5 +1,8 @@
 package app.ncinq.tv.ui
 
+import android.content.Intent
+import android.net.Uri
+
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SystemUpdate
@@ -54,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -61,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -97,6 +103,10 @@ fun HomeScreen(
         is LoadState.Ready -> {
             val feed = value.value
             var featuredItem by remember(feed.featured?.id) { mutableStateOf(feed.featured) }
+            val sectionCount = 1 + (if (feed.networks.isNotEmpty()) 1 else 0) + feed.rows.size
+            val sectionFocus = remember(feed.rows.map { it.title }, feed.networks.isNotEmpty()) {
+                List(sectionCount) { FocusRequester() }
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize().background(AppBackground),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -108,14 +118,33 @@ fun HomeScreen(
                             featured = featured,
                             onPlay = { onPlay(featured) },
                             onOpen = { onOpen(featured) },
+                            focusRequester = sectionFocus[0],
+                            downFocusRequester = sectionFocus.getOrNull(1),
                         )
                     }
                 }
                 if (feed.networks.isNotEmpty()) {
-                    item(key = "networks") { NetworkShelf(feed.networks, onNetwork) }
+                    item(key = "networks") {
+                        NetworkShelf(
+                            feed.networks,
+                            onNetwork,
+                            focusRequester = sectionFocus[1],
+                            upFocusRequester = sectionFocus[0],
+                            downFocusRequester = sectionFocus.getOrNull(2),
+                        )
+                    }
                 }
-                items(feed.rows, key = { it.title }) { row ->
-                    MediaShelf(row = row, onOpen = onOpen, onFocus = { featuredItem = it })
+                items(feed.rows.size, key = { feed.rows[it].title }) { rowIndex ->
+                    val row = feed.rows[rowIndex]
+                    val sectionIndex = 1 + (if (feed.networks.isNotEmpty()) 1 else 0) + rowIndex
+                    MediaShelf(
+                        row = row,
+                        onOpen = onOpen,
+                        onFocus = { featuredItem = it },
+                        rowFocusRequester = sectionFocus[sectionIndex],
+                        upFocusRequester = sectionFocus.getOrNull(sectionIndex - 1),
+                        downFocusRequester = sectionFocus.getOrNull(sectionIndex + 1),
+                    )
                 }
             }
         }
@@ -123,16 +152,28 @@ fun HomeScreen(
 }
 
 @Composable
-private fun NetworkShelf(networks: List<NetworkItem>, onNetwork: (NetworkItem) -> Unit) {
+private fun NetworkShelf(
+    networks: List<NetworkItem>,
+    onNetwork: (NetworkItem) -> Unit,
+    focusRequester: FocusRequester,
+    upFocusRequester: FocusRequester,
+    downFocusRequester: FocusRequester?,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Browse by network", color = TextPrimary, fontSize = 21.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = ScreenGutter))
         LazyRow(contentPadding = PaddingValues(horizontal = ScreenGutter, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(networks, key = { it.id }) { network ->
+                val index = networks.indexOf(network)
                 var focused by remember { mutableStateOf(false) }
                 Box(
                     Modifier.width(190.dp).height(86.dp).scale(if (focused) 1.05f else 1f)
                         .clip(RoundedCornerShape(6.dp)).background(Color(0xFF17181D))
                         .border(if (focused) 3.dp else 1.dp, if (focused) Color.White else Color.White.copy(alpha = 0.08f), RoundedCornerShape(6.dp))
+                        .then(if (index == 0) Modifier.focusRequester(focusRequester) else Modifier)
+                        .focusProperties {
+                            up = upFocusRequester
+                            downFocusRequester?.let { down = it }
+                        }
                         .onFocusChanged { focused = it.isFocused }.clickable { onNetwork(network) },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -144,9 +185,14 @@ private fun NetworkShelf(networks: List<NetworkItem>, onNetwork: (NetworkItem) -
 }
 
 @Composable
-private fun FeaturedHero(featured: MediaItem, onPlay: () -> Unit, onOpen: () -> Unit) {
-    val actionFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { actionFocusRequester.requestFocus() }
+private fun FeaturedHero(
+    featured: MediaItem,
+    onPlay: () -> Unit,
+    onOpen: () -> Unit,
+    focusRequester: FocusRequester,
+    downFocusRequester: FocusRequester?,
+) {
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
     Box(modifier = Modifier.fillMaxWidth().height(500.dp)) {
         Crossfade(targetState = featured, label = "featuredArtwork") { item ->
             AsyncImage(
@@ -194,9 +240,9 @@ private fun FeaturedHero(featured: MediaItem, onPlay: () -> Unit, onOpen: () -> 
                     onClick = onPlay,
                     icon = Icons.Rounded.PlayArrow,
                     emphasis = true,
-                    modifier = Modifier.focusRequester(actionFocusRequester),
+                    modifier = Modifier.focusRequester(focusRequester).focusProperties { downFocusRequester?.let { down = it } },
                 )
-                FocusButton(label = "More info", onClick = onOpen, icon = Icons.Rounded.Info)
+                FocusButton(label = "More info", onClick = onOpen, icon = Icons.Rounded.Info, modifier = Modifier.focusProperties { downFocusRequester?.let { down = it } })
             }
         }
     }
@@ -511,6 +557,7 @@ fun DetailsScreen(
     onPlay: () -> Unit,
     onOpenRelated: (MediaItem) -> Unit,
 ) {
+    val context = LocalContext.current
     LaunchedEffect(mediaType, mediaId) { viewModel.loadDetails(mediaType, mediaId) }
     val detailsState by viewModel.details.collectAsState()
     val seasonState by viewModel.season.collectAsState()
@@ -548,6 +595,7 @@ fun DetailsScreen(
             },
             onOpenRelated = onOpenRelated,
             showRecommendations = !viewModel.isKidsProfile,
+            onTrailer = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
         )
     }
 }
@@ -564,6 +612,7 @@ private fun DetailsContent(
     onEpisodePlay: (SeasonDetails, Int) -> Unit,
     onOpenRelated: (MediaItem) -> Unit,
     showRecommendations: Boolean,
+    onTrailer: (String) -> Unit,
 ) {
     val actionFocusRequester = remember(details.id, details.type) { FocusRequester() }
     val canContinue = details.type == MediaType.TV.wireName && trackedItem?.let {
@@ -632,6 +681,9 @@ private fun DetailsContent(
                         }
                         if (details.type == MediaType.MOVIE.wireName) {
                             FocusButton("Play", onMoviePlay, icon = Icons.Rounded.PlayArrow, modifier = Modifier.focusRequester(actionFocusRequester))
+                        }
+                        details.trailerUrl?.let { trailerUrl ->
+                            FocusButton("Trailer", onClick = { onTrailer(trailerUrl) }, icon = Icons.Rounded.Movie)
                         }
                         FocusButton(
                             if (trackedItem?.isFavorite == true) "Favorited" else "Add favorite",

@@ -29,6 +29,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -232,7 +235,14 @@ private fun ProgressRail(progress: Float, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MediaShelf(row: MediaRow, onOpen: (MediaItem) -> Unit, onFocus: (MediaItem) -> Unit = {}) {
+fun MediaShelf(
+    row: MediaRow,
+    onOpen: (MediaItem) -> Unit,
+    onFocus: (MediaItem) -> Unit = {},
+    rowFocusRequester: FocusRequester? = null,
+    upFocusRequester: FocusRequester? = null,
+    downFocusRequester: FocusRequester? = null,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
         Text(
             text = row.title,
@@ -246,7 +256,14 @@ fun MediaShelf(row: MediaRow, onOpen: (MediaItem) -> Unit, onFocus: (MediaItem) 
             contentPadding = PaddingValues(horizontal = OverscanHorizontal, vertical = 10.dp),
         ) {
             items(row.items, key = { "${it.type}:${it.id}" }) { item ->
-                LandscapeMediaCard(item = item, onClick = { onOpen(item) }, onFocus = onFocus)
+                val index = row.items.indexOf(item)
+                val focusModifier = Modifier
+                    .then(if (index == 0 && rowFocusRequester != null) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                    .focusProperties {
+                        upFocusRequester?.let { up = it }
+                        downFocusRequester?.let { down = it }
+                    }
+                LandscapeMediaCard(item = item, modifier = focusModifier, onClick = { onOpen(item) }, onFocus = onFocus)
             }
         }
     }

@@ -136,6 +136,7 @@ fun NCinqTvApp(
                 },
                 onSave = { profile -> profiles = profileRepository.save(profile) },
                 onDelete = { profile -> profiles = profileRepository.delete(profile.id) },
+                onMove = { profile, offset -> profiles = profileRepository.move(profile.id, offset) },
             )
         } else if (route == Routes.PLAYER) {
             PlayerScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
