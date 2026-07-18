@@ -48,6 +48,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +76,9 @@ import app.ncinq.tv.ui.FavoritesScreen
 import app.ncinq.tv.ui.HistoryScreen
 import app.ncinq.tv.ui.HomeScreen
 import app.ncinq.tv.ui.NetworkCatalogScreen
+import app.ncinq.tv.ui.DefaultViewerProfiles
+import app.ncinq.tv.ui.ProfileSelector
+import app.ncinq.tv.ui.ViewerProfile
 import app.ncinq.tv.ui.Panel
 import app.ncinq.tv.ui.OverscanVertical
 import app.ncinq.tv.ui.SearchScreen
@@ -107,6 +111,10 @@ fun NCinqTvApp(
     viewModel: AppViewModel,
     onInstallUpdate: (UpdateInfo) -> Unit,
 ) {
+    val context = LocalContext.current
+    val profilePreferences = remember { context.getSharedPreferences("viewer_profiles", 0) }
+    val lastProfileId = remember { profilePreferences.getString("last_profile", "main") }
+    var activeProfile by remember { mutableStateOf<ViewerProfile?>(null) }
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
@@ -115,11 +123,22 @@ fun NCinqTvApp(
     val railFocusGate = remember { NavigationRailFocusGate() }
 
     Box(Modifier.fillMaxSize().background(AppBackground)) {
-        if (route == Routes.PLAYER) {
+        if (activeProfile == null) {
+            ProfileSelector(lastProfileId = lastProfileId) { profile ->
+                profilePreferences.edit().putString("last_profile", profile.id).apply()
+                activeProfile = profile
+            }
+        } else if (route == Routes.PLAYER) {
             PlayerScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
         } else {
             Row(Modifier.fillMaxSize()) {
-                NavigationRail(navController = navController, currentRoute = route, focusGate = railFocusGate)
+                NavigationRail(
+                    navController = navController,
+                    currentRoute = route,
+                    focusGate = railFocusGate,
+                    activeProfile = activeProfile ?: DefaultViewerProfiles.first(),
+                    onSwitchProfile = { activeProfile = null },
+                )
                 AppNavHost(navController = navController, viewModel = viewModel, railFocusGate = railFocusGate)
             }
         }
@@ -227,6 +246,8 @@ private fun NavigationRail(
     navController: NavHostController,
     currentRoute: String?,
     focusGate: NavigationRailFocusGate,
+    activeProfile: ViewerProfile,
+    onSwitchProfile: () -> Unit,
 ) {
     val destinations = listOf(
         Destination(Routes.HOME, "Home", Icons.Rounded.Home),
@@ -290,15 +311,13 @@ private fun NavigationRail(
             )
         }
         Spacer(Modifier.weight(1f))
-        Row(
-            modifier = Modifier.height(48.dp).padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Rounded.Person, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(23.dp))
-            if (expanded) {
-                Text("Guest", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 15.dp), maxLines = 1)
-            }
-        }
+        RailItem(
+            destination = Destination("profiles", activeProfile.name, activeProfile.icon),
+            expanded = expanded,
+            selected = false,
+            canFocus = { focusGate.acceptsFocus },
+            onClick = onSwitchProfile,
+        )
     }
 }
 
