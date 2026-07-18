@@ -547,6 +547,7 @@ fun DetailsScreen(
                 onPlay()
             },
             onOpenRelated = onOpenRelated,
+            showRecommendations = !viewModel.isKidsProfile,
         )
     }
 }
@@ -562,6 +563,7 @@ private fun DetailsContent(
     onMoviePlay: () -> Unit,
     onEpisodePlay: (SeasonDetails, Int) -> Unit,
     onOpenRelated: (MediaItem) -> Unit,
+    showRecommendations: Boolean,
 ) {
     val actionFocusRequester = remember(details.id, details.type) { FocusRequester() }
     val canContinue = details.type == MediaType.TV.wireName && trackedItem?.let {
@@ -713,7 +715,7 @@ private fun DetailsContent(
                 }
             }
         }
-        if (details.recommendations.isNotEmpty()) item(key = "recommendations") {
+        if (showRecommendations && details.recommendations.isNotEmpty()) item(key = "recommendations") {
             MediaShelf(app.ncinq.tv.data.MediaRow("More like this", details.recommendations), onOpenRelated)
         }
     }

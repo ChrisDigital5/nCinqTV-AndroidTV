@@ -63,6 +63,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.tv.material3.Text
 import app.ncinq.tv.data.MediaItem
 import app.ncinq.tv.data.MediaType
+import app.ncinq.tv.data.ProfileRepository
+import app.ncinq.tv.data.ViewerProfile
 import app.ncinq.tv.data.UpdateInfo
 import app.ncinq.tv.data.UpdateInstallState
 import app.ncinq.tv.player.PlayerScreen
@@ -76,9 +78,8 @@ import app.ncinq.tv.ui.FavoritesScreen
 import app.ncinq.tv.ui.HistoryScreen
 import app.ncinq.tv.ui.HomeScreen
 import app.ncinq.tv.ui.NetworkCatalogScreen
-import app.ncinq.tv.ui.DefaultViewerProfiles
 import app.ncinq.tv.ui.ProfileSelector
-import app.ncinq.tv.ui.ViewerProfile
+import app.ncinq.tv.ui.profileAvatarIcon
 import app.ncinq.tv.ui.Panel
 import app.ncinq.tv.ui.OverscanVertical
 import app.ncinq.tv.ui.SearchScreen
@@ -112,8 +113,9 @@ fun NCinqTvApp(
     onInstallUpdate: (UpdateInfo) -> Unit,
 ) {
     val context = LocalContext.current
-    val profilePreferences = remember { context.getSharedPreferences("viewer_profiles", 0) }
-    val lastProfileId = remember { profilePreferences.getString("last_profile", "main") }
+    val profileRepository = remember { ProfileRepository(context) }
+    var profiles by remember { mutableStateOf(profileRepository.profiles()) }
+    val lastProfileId = remember { profileRepository.lastProfileId() }
     var activeProfile by remember { mutableStateOf<ViewerProfile?>(null) }
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -124,10 +126,17 @@ fun NCinqTvApp(
 
     Box(Modifier.fillMaxSize().background(AppBackground)) {
         if (activeProfile == null) {
-            ProfileSelector(lastProfileId = lastProfileId) { profile ->
-                profilePreferences.edit().putString("last_profile", profile.id).apply()
-                activeProfile = profile
-            }
+            ProfileSelector(
+                profiles = profiles,
+                lastProfileId = lastProfileId,
+                onSelect = { profile ->
+                    profileRepository.select(profile)
+                    viewModel.setActiveProfile(profile)
+                    activeProfile = profile
+                },
+                onSave = { profile -> profiles = profileRepository.save(profile) },
+                onDelete = { profile -> profiles = profileRepository.delete(profile.id) },
+            )
         } else if (route == Routes.PLAYER) {
             PlayerScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
         } else {
@@ -136,7 +145,7 @@ fun NCinqTvApp(
                     navController = navController,
                     currentRoute = route,
                     focusGate = railFocusGate,
-                    activeProfile = activeProfile ?: DefaultViewerProfiles.first(),
+                    activeProfile = activeProfile ?: profiles.first(),
                     onSwitchProfile = { activeProfile = null },
                 )
                 AppNavHost(navController = navController, viewModel = viewModel, railFocusGate = railFocusGate)
@@ -257,7 +266,7 @@ private fun NavigationRail(
         Destination(Routes.HISTORY, "History", Icons.Rounded.History),
         Destination(Routes.FAVORITES, "Favorites", Icons.Rounded.Favorite),
         Destination(Routes.SETTINGS, "Settings", Icons.Rounded.Settings),
-    )
+    ).filterNot { activeProfile.kidsMode && it.route == Routes.SEARCH }
     var expanded by remember { mutableStateOf(false) }
     val railWidth by animateDpAsState(if (expanded) 238.dp else 112.dp, label = "railWidth")
 
@@ -312,7 +321,7 @@ private fun NavigationRail(
         }
         Spacer(Modifier.weight(1f))
         RailItem(
-            destination = Destination("profiles", activeProfile.name, activeProfile.icon),
+            destination = Destination("profiles", activeProfile.name, profileAvatarIcon(activeProfile.avatar)),
             expanded = expanded,
             selected = false,
             canFocus = { focusGate.acceptsFocus },

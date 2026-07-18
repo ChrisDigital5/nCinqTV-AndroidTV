@@ -10,6 +10,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -17,18 +19,23 @@ private val Context.trackerDataStore by preferencesDataStore(name = "tracker")
 
 class TrackerRepository(private val context: Context) {
     private val gson = Gson()
-    private val itemsKey = stringPreferencesKey("tracked_items_v1")
+    private val activeProfileId = MutableStateFlow("main")
     private val itemListType = object : TypeToken<List<TrackedItem>>() {}.type
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    val items = context.trackerDataStore.data
-        .map { preferences ->
+    val items = activeProfileId.flatMapLatest { profileId ->
+        context.trackerDataStore.data.map { preferences ->
             runCatching {
-                gson.fromJson<List<TrackedItem>>(preferences[itemsKey] ?: "[]", itemListType)
+                gson.fromJson<List<TrackedItem>>(preferences[keyFor(profileId)] ?: "[]", itemListType)
             }.getOrDefault(emptyList())
                 .sortedByDescending { it.updatedAt }
         }
+    }
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    fun setActiveProfile(profileId: String) {
+        activeProfileId.value = profileId
+    }
 
     suspend fun toggleFavorite(details: MediaDetails) {
         mutate { current ->
@@ -164,6 +171,7 @@ class TrackerRepository(private val context: Context) {
     }
 
     private suspend fun mutate(transform: (List<TrackedItem>) -> List<TrackedItem>) {
+        val itemsKey = keyFor(activeProfileId.value)
         context.trackerDataStore.edit { preferences ->
             val current = runCatching {
                 gson.fromJson<List<TrackedItem>>(preferences[itemsKey] ?: "[]", itemListType)
@@ -171,4 +179,9 @@ class TrackerRepository(private val context: Context) {
             preferences[itemsKey] = gson.toJson(transform(current))
         }
     }
+
+    // Keep all pre-profile tracking on the original profile; other profiles receive isolated keys.
+    private fun keyFor(profileId: String) = stringPreferencesKey(
+        if (profileId == "main") "tracked_items_v1" else "tracked_items_v1_$profileId"
+    )
 }

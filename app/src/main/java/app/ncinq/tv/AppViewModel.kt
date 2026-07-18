@@ -8,6 +8,7 @@ import app.ncinq.tv.data.CatalogRepository
 import app.ncinq.tv.data.HomeFeed
 import app.ncinq.tv.data.LoadState
 import app.ncinq.tv.data.MediaDetails
+import app.ncinq.tv.data.MediaRow
 import app.ncinq.tv.data.MediaType
 import app.ncinq.tv.data.PlaybackRequest
 import app.ncinq.tv.data.SearchResults
@@ -17,6 +18,7 @@ import app.ncinq.tv.data.TrackedItem
 import app.ncinq.tv.data.TrackerRepository
 import app.ncinq.tv.data.UpdateInfo
 import app.ncinq.tv.data.UpdateInstallState
+import app.ncinq.tv.data.ViewerProfile
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +75,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val trackedItems = trackerRepository.items
 
+    fun setActiveProfile(profile: ViewerProfile) {
+        activeProfile = profile
+        trackerRepository.setActiveProfile(profile.id)
+        loadHome(force = true)
+    }
+
     private val streamCache = ConcurrentHashMap<String, StreamResult>()
     private val pendingStreams = mutableMapOf<String, Deferred<StreamResult>>()
     private val pendingMutex = Mutex()
@@ -83,6 +91,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var seasonJob: Job? = null
     private var searchJob: Job? = null
     private var catalogJob: Job? = null
+    private var activeProfile: ViewerProfile? = null
+    val isKidsProfile: Boolean get() = activeProfile?.kidsMode == true
 
     init {
         loadHome()
@@ -93,8 +103,50 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (!force && _home.value is LoadState.Ready) return
         viewModelScope.launch {
             _home.value = LoadState.Loading
-            _home.value = runLoad { catalogRepository.home() }
+            _home.value = runLoad {
+                val profile = activeProfile ?: return@runLoad catalogRepository.home()
+                if (profile.kidsMode) {
+                    val movies = catalogRepository.catalog(MediaType.MOVIE, "popular", 1, genre = 10751).items
+                    val shows = catalogRepository.catalog(MediaType.TV, "popular", 1, genre = 10762).items
+                    HomeFeed(
+                        featured = (shows + movies).firstOrNull(),
+                        rows = listOf(MediaRow("Kids movies", movies), MediaRow("Kids shows", shows)),
+                        networks = emptyList(),
+                    )
+                } else {
+                    val feed = catalogRepository.home()
+                    val preferredRows = buildList {
+                        profile.moviePreferences.firstOrNull()?.let { preference ->
+                            genreId(preference, MediaType.MOVIE)?.let { id ->
+                                val items = catalogRepository.catalog(MediaType.MOVIE, "popular", 1, genre = id).items
+                                if (items.isNotEmpty()) add(MediaRow("Movies for ${profile.name}: $preference", items))
+                            }
+                        }
+                        profile.showPreferences.firstOrNull()?.let { preference ->
+                            genreId(preference, MediaType.TV)?.let { id ->
+                                val items = catalogRepository.catalog(MediaType.TV, "popular", 1, genre = id).items
+                                if (items.isNotEmpty()) add(MediaRow("Shows for ${profile.name}: $preference", items))
+                            }
+                        }
+                    }
+                    feed.copy(rows = preferredRows + feed.rows)
+                }
+            }
         }
+    }
+
+    private fun genreId(name: String, type: MediaType): Int? = when (name) {
+        "Action" -> if (type == MediaType.MOVIE) 28 else 10759
+        "Comedy" -> 35
+        "Drama" -> 18
+        "Horror" -> 27
+        "Sci-Fi" -> if (type == MediaType.MOVIE) 878 else 10765
+        "Animation" -> 16
+        "Reality" -> 10764
+        "Crime" -> 80
+        "Documentary" -> 99
+        "Kids" -> 10762
+        else -> null
     }
 
     fun loadCatalog(
@@ -105,14 +157,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         sort: String? = null,
         year: Int? = null,
     ) {
+        val safeGenre = if (activeProfile?.kidsMode == true) {
+            if (type == MediaType.MOVIE) 10751 else 10762
+        } else genre
         val previousQuery = catalogQuery
         val keepCurrentPage = _catalog.value is LoadState.Ready &&
             previousQuery.type == type && previousQuery.network == network
-        catalogQuery = CatalogQuery(type, category, genre, network, sort, year)
+        catalogQuery = CatalogQuery(type, category, safeGenre, if (activeProfile?.kidsMode == true) null else network, sort, year)
         catalogJob?.cancel()
         catalogJob = viewModelScope.launch {
             if (!keepCurrentPage) _catalog.value = LoadState.Loading
-            _catalog.value = runLoad { catalogRepository.catalog(type, category, 1, genre, network, sort, year) }
+            _catalog.value = runLoad { catalogRepository.catalog(type, category, 1, safeGenre, catalogQuery.network, sort, year) }
         }
     }
 
@@ -172,7 +227,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _details.value = loaded
             val details = (loaded as? LoadState.Ready)?.value
             if (type == MediaType.TV && details != null) {
-                val remembered = viewingPreferences.getInt("last_season_$id", 0).takeIf { it > 0 }
+                val remembered = viewingPreferences.getInt("last_season_${activeProfile?.id ?: "main"}_$id", 0).takeIf { it > 0 }
                     ?: trackedItems.value.firstOrNull { it.mediaId == id && it.mediaType == MediaType.TV }?.season
                 val seasonNumber = remembered?.takeIf { candidate -> details.seasons.any { it.number == candidate } }
                     ?: details.seasons.firstOrNull()?.number ?: 1
@@ -182,7 +237,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadSeason(showId: Int, seasonNumber: Int) {
-        viewingPreferences.edit().putInt("last_season_$showId", seasonNumber).apply()
+        viewingPreferences.edit().putInt("last_season_${activeProfile?.id ?: "main"}_$showId", seasonNumber).apply()
         seasonJob?.cancel()
         seasonJob = viewModelScope.launch {
             _season.value = LoadState.Loading
