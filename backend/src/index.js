@@ -240,7 +240,7 @@ function versionCodeFromTag(tagName) {
 }
 
 async function latestRelease(env, fetchFn) {
-  const response = await fetchFn(`https://api.github.com/repos/${env.GITHUB_REPO}/releases/latest?androidUpdater=3`, {
+  const response = await fetchFn(`https://api.github.com/repos/${env.GITHUB_REPO}/releases/latest?androidUpdater=4`, {
     headers: {
       accept: 'application/vnd.github+json',
       'user-agent': 'ncinqtv-android-updater',
