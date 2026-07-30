@@ -33,4 +33,15 @@ class PlayerRecoveryTest {
         assertFalse(hasRuntimeMismatch(null, 24L * 60_000L))
     }
 
+    @Test
+    fun `resolver HTTP failures offer explicit alternate server recovery`() {
+        val actions = recoveryActionsFor(PlaybackFailureKind.RESOLVER)
+
+        assertTrue(PlaybackRecoveryAction.ALTERNATE_SERVER in actions)
+        assertTrue(PlaybackRecoveryAction.RETRY in actions)
+        assertEquals(
+            "Direct server returned HTTP 500. Try again or use alternate server.",
+            resolverFailureMessage(500, "HTTP 500"),
+        )
+    }
 }

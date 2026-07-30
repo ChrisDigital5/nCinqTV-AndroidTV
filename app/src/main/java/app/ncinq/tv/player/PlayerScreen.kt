@@ -94,6 +94,7 @@ import app.ncinq.tv.ui.TextSecondary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import kotlin.math.max
 
 private const val SEEK_INCREMENT_MS = 10_000L
@@ -173,7 +174,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     var captionsEnabled by remember { mutableStateOf(true) }
     var seekFeedback by remember { mutableStateOf<String?>(null) }
     var seekFeedbackEpoch by remember { mutableIntStateOf(0) }
-    var sourceMismatch by remember { mutableStateOf(false) }
+    var playbackFailure by remember { mutableStateOf<PlaybackFailureKind?>(null) }
     var alternateUrl by remember { mutableStateOf<String?>(null) }
 
     fun showControls() {
@@ -275,7 +276,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                         loading = false
                         durationMs = player.duration.coerceAtLeast(0L)
                         if (hasRuntimeMismatch(activeRequest.expectedRuntimeMinutes, durationMs)) {
-                            sourceMismatch = true
+                            playbackFailure = PlaybackFailureKind.RUNTIME_MISMATCH
                             error = "This server returned the wrong episode (${formatTime(durationMs)} instead of about ${activeRequest.expectedRuntimeMinutes} min)."
                             player.pause()
                         }
@@ -323,6 +324,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                 }
                 loading = false
                 controlsVisible = true
+                playbackFailure = PlaybackFailureKind.MEDIA_SOURCE
                 error = playbackError.friendlyMessage(statusCode)
                 Log.e("NCinqPlayer", "Playback failed", playbackError)
             }
@@ -341,7 +343,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         prefetched = false
         nextRequest = null
         transitionInFlight = false
-        sourceMismatch = false
+        playbackFailure = null
         alternateUrl = null
         stream = null
         captionTracks = emptyList()
@@ -373,7 +375,8 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         }.onFailure { failure ->
             loading = false
             controlsVisible = true
-            error = failure.message ?: "No direct stream is currently available."
+            playbackFailure = PlaybackFailureKind.RESOLVER
+            error = resolverFailureMessage((failure as? HttpException)?.code(), failure.message)
         }
     }
 
@@ -583,8 +586,9 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     Text("Playback interrupted", color = TextPrimary, fontSize = 27.sp, fontWeight = FontWeight.Bold)
                     Text(message, color = TextSecondary, fontSize = 15.sp)
                     Spacer(Modifier.height(6.dp))
+                    val recoveryActions = playbackFailure?.let(::recoveryActionsFor).orEmpty()
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (sourceMismatch) {
+                        if (PlaybackRecoveryAction.ALTERNATE_SERVER in recoveryActions) {
                             FocusButton(
                                 "Use alternate server",
                                 onClick = {
@@ -599,8 +603,12 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                         FocusButton(
                             "Try again",
                             onClick = ::retryPlayback,
-                            modifier = if (sourceMismatch) Modifier else Modifier.focusRequester(retryFocusRequester),
-                            selected = !sourceMismatch,
+                            modifier = if (PlaybackRecoveryAction.ALTERNATE_SERVER in recoveryActions) {
+                                Modifier
+                            } else {
+                                Modifier.focusRequester(retryFocusRequester)
+                            },
+                            selected = PlaybackRecoveryAction.ALTERNATE_SERVER !in recoveryActions,
                         )
                         FocusButton("Back to details", onClick = onBack)
                     }
@@ -834,6 +842,34 @@ internal fun playbackFraction(positionMs: Long, durationMs: Long): Float {
 internal fun hasRuntimeMismatch(expectedMinutes: Int?, actualDurationMs: Long): Boolean {
     if (expectedMinutes == null || expectedMinutes < 30 || actualDurationMs <= 0) return false
     return actualDurationMs < expectedMinutes * 60_000L * 0.65
+}
+
+internal enum class PlaybackFailureKind {
+    RESOLVER,
+    MEDIA_SOURCE,
+    RUNTIME_MISMATCH,
+}
+
+internal enum class PlaybackRecoveryAction {
+    ALTERNATE_SERVER,
+    RETRY,
+    BACK,
+}
+
+internal fun recoveryActionsFor(failure: PlaybackFailureKind): Set<PlaybackRecoveryAction> = when (failure) {
+    PlaybackFailureKind.RESOLVER,
+    PlaybackFailureKind.MEDIA_SOURCE,
+    PlaybackFailureKind.RUNTIME_MISMATCH -> setOf(
+        PlaybackRecoveryAction.ALTERNATE_SERVER,
+        PlaybackRecoveryAction.RETRY,
+        PlaybackRecoveryAction.BACK,
+    )
+}
+
+internal fun resolverFailureMessage(statusCode: Int?, detail: String?): String = when {
+    statusCode != null -> "Direct server returned HTTP $statusCode. Try again or use alternate server."
+    !detail.isNullOrBlank() -> "$detail Try again or use alternate server."
+    else -> "No direct stream is currently available. Try again or use alternate server."
 }
 
 private fun PlaybackRequest.alternateEmbedUrl(): String = when (mediaType) {
