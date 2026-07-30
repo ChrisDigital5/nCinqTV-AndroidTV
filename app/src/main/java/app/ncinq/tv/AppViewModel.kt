@@ -254,6 +254,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             backdropUrl = details.backdropUrl,
             imdbId = details.imdbId,
             releaseYear = details.year,
+            expectedRuntimeMinutes = details.runtimeMinutes,
         )
     }
 
@@ -305,7 +306,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             season = item.season,
             episode = item.episode,
             episodeTitle = item.episodeTitle,
-            expectedRuntimeMinutes = item.expectedRuntimeMinutes,
+            expectedRuntimeMinutes = item.expectedRuntimeMinutes ?: details?.runtimeMinutes,
             seasonCount = details?.seasonCount ?: 0,
         )
     }

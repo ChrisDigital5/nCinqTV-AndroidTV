@@ -62,10 +62,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -148,8 +150,12 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     val rootFocusRequester = remember { FocusRequester() }
     val retryFocusRequester = remember { FocusRequester() }
     val controlFocusRequester = remember { FocusRequester() }
+    val captionFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     var stream by remember { mutableStateOf<StreamResult?>(null) }
+    var captionTracks by remember { mutableStateOf<List<ResolvedCaption>>(emptyList()) }
+    var selectedCaptionId by remember { mutableStateOf<String?>(null) }
+    var subtitleMenuVisible by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var reloadKey by remember { mutableIntStateOf(0) }
@@ -195,12 +201,29 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         showControls()
     }
 
-    fun toggleCaptions() {
-        captionsEnabled = !captionsEnabled
-        player.trackSelectionParameters = player.trackSelectionParameters
+    fun selectCaption(caption: ResolvedCaption?) {
+        val parameters = player.trackSelectionParameters
             .buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captionsEnabled)
-            .build()
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, caption == null)
+        if (caption != null) {
+            fun findOverride(matches: (Format) -> Boolean): TrackSelectionOverride? {
+                return player.currentTracks.groups.firstNotNullOfOrNull { group ->
+                    if (group.type != C.TRACK_TYPE_TEXT) return@firstNotNullOfOrNull null
+                    val trackIndex = (0 until group.length).firstOrNull { index ->
+                        matches(group.getTrackFormat(index))
+                    } ?: return@firstNotNullOfOrNull null
+                    TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
+                }
+            }
+            val match = findOverride { it.id == caption.trackId }
+                ?: findOverride { it.label == caption.label }
+            if (match != null) parameters.setOverrideForType(match)
+        }
+        player.trackSelectionParameters = parameters.build()
+        selectedCaptionId = caption?.trackId
+        captionsEnabled = caption != null
+        subtitleMenuVisible = false
         showControls()
     }
 
@@ -222,6 +245,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
 
     BackHandler {
         when {
+            subtitleMenuVisible -> subtitleMenuVisible = false
             alternateUrl != null -> onBack()
             error != null -> {
                 saveProgress()
@@ -320,6 +344,9 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         sourceMismatch = false
         alternateUrl = null
         stream = null
+        captionTracks = emptyList()
+        selectedCaptionId = null
+        subtitleMenuVisible = false
         player.stop()
         player.clearMediaItems()
 
@@ -328,9 +355,14 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         }.onSuccess { resolved ->
             stream = resolved
             httpDataSourceFactory.setDefaultRequestProperties(resolved.headers)
-            val captions = resolved.captions.mapNotNull { caption ->
-                runCatching { captionResolver.resolve(context, caption) }.getOrNull()
-            }
+            val captions = resolved.captions.flatMap { caption ->
+                runCatching {
+                    captionResolver.resolve(context, caption, activeRequest.expectedRuntimeMinutes)
+                }.getOrDefault(emptyList())
+            }.distinctBy { it.trackId }
+            captionTracks = captions
+            selectedCaptionId = captions.firstOrNull()?.trackId
+            captionsEnabled = captions.isNotEmpty()
             player.setMediaItem(resolved.toMediaItem(captions))
             val savedPosition = viewModel.resumePosition(activeRequest)
             val resumeAt = max(savedPosition, retryPositionMs)
@@ -356,7 +388,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             if (positionMs > 0 && player.playbackState != Player.STATE_ENDED && positionMs % 5_000 < 600) {
                 viewModel.saveProgress(activeRequest, positionMs, durationMs)
             }
-            if (controlsVisible && player.playWhenReady && error == null && !loading &&
+            if (controlsVisible && !subtitleMenuVisible && player.playWhenReady && error == null && !loading &&
                 SystemClock.elapsedRealtime() - lastInteractionMs >= CONTROLS_TIMEOUT_MS
             ) {
                 controlsVisible = false
@@ -383,8 +415,13 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         if (error != null) retryFocusRequester.requestFocus() else rootFocusRequester.requestFocus()
     }
 
-    LaunchedEffect(controlsVisible, error, loading, alternateUrl) {
+    LaunchedEffect(controlsVisible, error, loading, alternateUrl, subtitleMenuVisible) {
         if (alternateUrl != null) return@LaunchedEffect
+        if (subtitleMenuVisible) {
+            delay(100)
+            captionFocusRequester.requestFocus()
+            return@LaunchedEffect
+        }
         if (controlsVisible && error == null && !loading) {
             delay(250)
             controlFocusRequester.requestFocus()
@@ -445,7 +482,10 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     }
                     KeyEvent.KEYCODE_CAPTIONS,
                     KeyEvent.KEYCODE_MENU -> {
-                        if (stream?.captions?.isNotEmpty() == true) toggleCaptions()
+                        if (captionTracks.isNotEmpty()) {
+                            subtitleMenuVisible = true
+                            showControls()
+                        }
                         true
                     }
                     else -> false
@@ -475,14 +515,26 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                 isPlaying = isPlaying,
                 positionMs = positionMs,
                 durationMs = durationMs,
-                captionsAvailable = stream?.captions?.isNotEmpty() == true,
+                captionsAvailable = captionTracks.isNotEmpty(),
                 captionsEnabled = captionsEnabled,
                 playFocusRequester = controlFocusRequester,
                 onPlayPause = ::togglePlayback,
                 onSeek = ::seekBy,
-                onCaptions = ::toggleCaptions,
+                onCaptions = {
+                    subtitleMenuVisible = true
+                    showControls()
+                },
                 onPreviousEpisode = { switchEpisode(next = false) },
                 onNextEpisode = { switchEpisode(next = true) },
+            )
+        }
+
+        if (subtitleMenuVisible && captionTracks.isNotEmpty() && error == null && !loading) {
+            SubtitleChooser(
+                captions = captionTracks,
+                selectedCaptionId = selectedCaptionId,
+                focusRequester = captionFocusRequester,
+                onSelect = ::selectCaption,
             )
         }
 
@@ -563,6 +615,71 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     Text("You reached the end of this title.", color = TextSecondary, fontSize = 15.sp)
                     FocusButton("Back to details", onClick = onBack, selected = true)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleChooser(
+    captions: List<ResolvedCaption>,
+    selectedCaptionId: String?,
+    focusRequester: FocusRequester,
+    onSelect: (ResolvedCaption?) -> Unit,
+) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.56f)).padding(42.dp),
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        Column(
+            modifier = Modifier
+                .width(410.dp)
+                .background(
+                    Color.Black.copy(alpha = 0.94f),
+                    androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                )
+                .border(
+                    1.dp,
+                    Color.White.copy(alpha = 0.12f),
+                    androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                )
+                .padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Subtitles", color = TextPrimary, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Choose the English release that best matches this video.",
+                color = TextSecondary,
+                fontSize = 13.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            FocusButton(
+                "Off",
+                onClick = { onSelect(null) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (selectedCaptionId == null) Modifier.focusRequester(focusRequester) else Modifier),
+                selected = selectedCaptionId == null,
+            )
+            captions.forEachIndexed { index, caption ->
+                val selected = caption.trackId == selectedCaptionId
+                FocusButton(
+                    caption.label,
+                    onClick = { onSelect(caption) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (selected || (selectedCaptionId != null && index == 0 && captions.none {
+                                    it.trackId == selectedCaptionId
+                                })
+                            ) {
+                                Modifier.focusRequester(focusRequester)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                    selected = selected,
+                )
             }
         }
     }
@@ -797,7 +914,8 @@ private fun StreamResult.toMediaItem(resolvedCaptions: List<ResolvedCaption>): M
         MediaItem.SubtitleConfiguration.Builder(resolved.uri)
             .setMimeType(MimeTypes.TEXT_VTT)
             .setLanguage(resolved.caption.language)
-            .setLabel(resolved.caption.language)
+            .setId(resolved.trackId)
+            .setLabel(resolved.label)
             .setSelectionFlags(if (index == 0) C.SELECTION_FLAG_DEFAULT else 0)
             .build()
     }
