@@ -3,8 +3,10 @@ package app.ncinq.tv.player
 import androidx.media3.common.PlaybackException
 import app.ncinq.tv.data.MediaType
 import app.ncinq.tv.data.PlaybackRequest
+import java.net.URI
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,5 +72,70 @@ class PlayerRecoveryTest {
                 title = "Unrelated show",
             ).requiresAlternateServer(),
         )
+    }
+
+    @Test
+    fun `alternate web player state is decoded for native TV controls`() {
+        assertEquals(
+            AlternatePlaybackState(
+                positionMs = 12_500L,
+                durationMs = 7_091_200L,
+                isPlaying = true,
+                ready = true,
+                ended = false,
+                captionsAvailable = true,
+                captionsEnabled = false,
+                playable = true,
+                failed = false,
+            ),
+            parseAlternatePlaybackState("\"12500|7091200|1|4|0|1|0|1|0\""),
+        )
+        assertEquals(
+            AlternatePlaybackState(
+                positionMs = 0L,
+                durationMs = 0L,
+                isPlaying = false,
+                ready = false,
+                ended = false,
+                captionsAvailable = false,
+                captionsEnabled = false,
+                playable = false,
+                failed = false,
+            ),
+            parseAlternatePlaybackState("\"0|0|0|0|0|0|0|0|0\""),
+        )
+        assertTrue(parseAlternatePlaybackState("\"0|0|0|0|0|0|0|0|1\"")?.failed == true)
+        assertNull(parseAlternatePlaybackState("null"))
+        assertNull(parseAlternatePlaybackState("\"not-a-player-state\""))
+    }
+
+    @Test
+    fun `alternate playback has five independent auto failover servers`() {
+        val sources = PlaybackRequest(
+            mediaId = 390043,
+            mediaType = MediaType.MOVIE,
+            title = "The Hitman's Bodyguard",
+        ).alternateStreamSources()
+
+        assertEquals(5, sources.size)
+        assertEquals("vidsrc", sources.first().id)
+        assertTrue(sources.first().url.contains("/movie/390043"))
+        assertEquals(
+            sources.size,
+            sources.map { URI(it.url).host }.distinct().size,
+        )
+    }
+
+    @Test
+    fun `alternate TV server URLs preserve season and episode`() {
+        val sources = PlaybackRequest(
+            mediaId = 1399,
+            mediaType = MediaType.TV,
+            title = "Example",
+            season = 4,
+            episode = 7,
+        ).alternateStreamSources()
+
+        assertTrue(sources.all { it.url.contains("/1399/4/7") })
     }
 }

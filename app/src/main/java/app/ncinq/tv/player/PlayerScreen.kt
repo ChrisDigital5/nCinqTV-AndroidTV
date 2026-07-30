@@ -6,6 +6,9 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -42,6 +46,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -100,6 +105,8 @@ import kotlin.math.max
 private const val SEEK_INCREMENT_MS = 10_000L
 private const val CONTROLS_TIMEOUT_MS = 4_500L
 private const val MAX_AUTOMATIC_RETRIES = 3
+private const val DIRECT_SOURCE_TIMEOUT_MS = 30_000L
+private const val ALTERNATE_SOURCE_TIMEOUT_MS = 15_000L
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -175,7 +182,15 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     var seekFeedback by remember { mutableStateOf<String?>(null) }
     var seekFeedbackEpoch by remember { mutableIntStateOf(0) }
     var playbackFailure by remember { mutableStateOf<PlaybackFailureKind?>(null) }
-    var alternateUrl by remember { mutableStateOf<String?>(null) }
+    var alternateSources by remember { mutableStateOf<List<AlternateStreamSource>>(emptyList()) }
+    var alternateSourceIndex by remember { mutableIntStateOf(0) }
+    var alternateWebView by remember { mutableStateOf<WebView?>(null) }
+    var alternateResumeApplied by remember { mutableStateOf(false) }
+    var alternateCaptionsAvailable by remember { mutableStateOf(false) }
+    var alternateSourceHealthy by remember { mutableStateOf(false) }
+    var alternateSwitchInFlight by remember { mutableStateOf(false) }
+    val activeAlternateSource = alternateSources.getOrNull(alternateSourceIndex)
+    val alternateUrl = activeAlternateSource?.url
 
     fun showControls() {
         controlsVisible = true
@@ -183,23 +198,109 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     }
 
     fun saveProgress(completed: Boolean = false) {
-        val duration = player.duration.takeIf { it > 0 } ?: 0L
-        val position = player.currentPosition.coerceAtLeast(0L)
+        val duration = if (alternateUrl != null) {
+            durationMs
+        } else {
+            player.duration.takeIf { it > 0 } ?: 0L
+        }
+        val position = if (alternateUrl != null) {
+            positionMs
+        } else {
+            player.currentPosition.coerceAtLeast(0L)
+        }
         viewModel.saveProgress(activeRequest, position, duration, completed)
     }
 
+    fun startAlternatePlayback() {
+        player.stop()
+        player.clearMediaItems()
+        alternateSources = activeRequest.alternateStreamSources()
+        alternateSourceIndex = 0
+        alternateWebView = null
+        alternateResumeApplied = false
+        alternateCaptionsAvailable = false
+        alternateSourceHealthy = false
+        alternateSwitchInFlight = false
+        captionTracks = emptyList()
+        selectedCaptionId = null
+        subtitleMenuVisible = false
+        captionsEnabled = false
+        isPlaying = false
+        positionMs = 0L
+        durationMs = 0L
+        loading = true
+        error = null
+        playbackFailure = null
+        controlsVisible = true
+        showControls()
+    }
+
+    fun advanceAlternateSource() {
+        if (alternateSwitchInFlight || alternateSources.isEmpty()) return
+        alternateSwitchInFlight = true
+        if (positionMs > 0L) saveProgress()
+        if (alternateSourceIndex + 1 < alternateSources.size) {
+            alternateSourceIndex += 1
+            alternateWebView = null
+            alternateResumeApplied = false
+            alternateCaptionsAvailable = false
+            alternateSourceHealthy = false
+            isPlaying = false
+            positionMs = 0L
+            durationMs = 0L
+            loading = true
+            controlsVisible = true
+            showControls()
+        } else {
+            loading = false
+            controlsVisible = true
+            playbackFailure = PlaybackFailureKind.MEDIA_SOURCE
+            error = "None of the ${alternateSources.size} alternate servers returned a playable video."
+        }
+    }
+
     fun togglePlayback() {
-        if (player.isPlaying) player.pause() else player.play()
+        if (alternateUrl != null) {
+            alternateWebView?.toggleAlternatePlayback()
+        } else if (player.isPlaying) {
+            player.pause()
+        } else {
+            player.play()
+        }
         showControls()
     }
 
     fun seekBy(offsetMs: Long) {
-        val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-        player.seekTo((player.currentPosition + offsetMs).coerceIn(0L, duration))
+        if (alternateUrl != null) {
+            alternateWebView?.seekAlternateBy(offsetMs)
+        } else {
+            val duration = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+            player.seekTo((player.currentPosition + offsetMs).coerceIn(0L, duration))
+        }
         val seconds = (kotlin.math.abs(offsetMs) / 1_000L).coerceAtLeast(1L)
         seekFeedback = if (offsetMs < 0) "-$seconds" else "+$seconds"
         seekFeedbackEpoch += 1
         showControls()
+    }
+
+    fun playPlayback() {
+        if (alternateUrl != null) alternateWebView?.playAlternate() else player.play()
+        showControls()
+    }
+
+    fun pausePlayback() {
+        if (alternateUrl != null) alternateWebView?.pauseAlternate() else player.pause()
+        showControls()
+    }
+
+    fun toggleCaptions() {
+        if (alternateUrl != null) {
+            alternateWebView?.toggleAlternateEnglishCaptions()
+            showControls()
+        } else if (captionTracks.isNotEmpty()) {
+            subtitleMenuVisible = true
+            showControls()
+        }
     }
 
     fun selectCaption(caption: ResolvedCaption?) {
@@ -247,7 +348,6 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     BackHandler {
         when {
             subtitleMenuVisible -> subtitleMenuVisible = false
-            alternateUrl != null -> onBack()
             error != null -> {
                 saveProgress()
                 onBack()
@@ -276,9 +376,9 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                         loading = false
                         durationMs = player.duration.coerceAtLeast(0L)
                         if (hasRuntimeMismatch(activeRequest.expectedRuntimeMinutes, durationMs)) {
-                            playbackFailure = PlaybackFailureKind.RUNTIME_MISMATCH
-                            error = "This server returned the wrong episode (${formatTime(durationMs)} instead of about ${activeRequest.expectedRuntimeMinutes} min)."
+                            saveProgress()
                             player.pause()
+                            startAlternatePlayback()
                         }
                         if (wasPreparing) showControls()
                     }
@@ -324,9 +424,9 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                 }
                 loading = false
                 controlsVisible = true
-                playbackFailure = PlaybackFailureKind.MEDIA_SOURCE
-                error = playbackError.friendlyMessage(statusCode)
                 Log.e("NCinqPlayer", "Playback failed", playbackError)
+                saveProgress()
+                startAlternatePlayback()
             }
         }
         player.addListener(listener)
@@ -344,7 +444,13 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         nextRequest = null
         transitionInFlight = false
         playbackFailure = null
-        alternateUrl = null
+        alternateSources = emptyList()
+        alternateSourceIndex = 0
+        alternateWebView = null
+        alternateResumeApplied = false
+        alternateCaptionsAvailable = false
+        alternateSourceHealthy = false
+        alternateSwitchInFlight = false
         stream = null
         captionTracks = emptyList()
         selectedCaptionId = null
@@ -353,9 +459,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         player.clearMediaItems()
 
         if (activeRequest.requiresAlternateServer()) {
-            loading = false
-            controlsVisible = false
-            alternateUrl = activeRequest.alternateEmbedUrl()
+            startAlternatePlayback()
             return@LaunchedEffect
         }
 
@@ -380,10 +484,13 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             player.prepare()
             player.play()
         }.onFailure { failure ->
-            loading = false
-            controlsVisible = true
-            playbackFailure = PlaybackFailureKind.RESOLVER
-            error = resolverFailureMessage((failure as? HttpException)?.code(), failure.message)
+            Log.w(
+                "NCinqPlayer",
+                "Direct resolver failed; trying alternate servers: " +
+                    resolverFailureMessage((failure as? HttpException)?.code(), failure.message),
+                failure,
+            )
+            startAlternatePlayback()
         }
     }
 
@@ -393,12 +500,14 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         rootFocusRequester.requestFocus()
         while (isActive) {
             delay(500)
-            positionMs = player.contentPosition.coerceAtLeast(0L)
-            durationMs = player.contentDuration.coerceAtLeast(0L)
-            if (positionMs > 0 && player.playbackState != Player.STATE_ENDED && positionMs % 5_000 < 600) {
+            if (alternateUrl == null) {
+                positionMs = player.contentPosition.coerceAtLeast(0L)
+                durationMs = player.contentDuration.coerceAtLeast(0L)
+            }
+            if (positionMs > 0 && !finished && positionMs % 5_000 < 600) {
                 viewModel.saveProgress(activeRequest, positionMs, durationMs)
             }
-            if (controlsVisible && !subtitleMenuVisible && player.playWhenReady && error == null && !loading &&
+            if (controlsVisible && !subtitleMenuVisible && isPlaying && error == null && !loading &&
                 SystemClock.elapsedRealtime() - lastInteractionMs >= CONTROLS_TIMEOUT_MS
             ) {
                 controlsVisible = false
@@ -426,17 +535,42 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
     }
 
     LaunchedEffect(controlsVisible, error, loading, alternateUrl, subtitleMenuVisible) {
-        if (alternateUrl != null) return@LaunchedEffect
         if (subtitleMenuVisible) {
             delay(100)
             captionFocusRequester.requestFocus()
             return@LaunchedEffect
         }
-        if (controlsVisible && error == null && !loading) {
+        if (activeAlternateSource != null && loading && error == null) {
+            delay(250)
+            controlFocusRequester.requestFocus()
+        } else if (controlsVisible && error == null && !loading) {
             delay(250)
             controlFocusRequester.requestFocus()
         }
         else if (!controlsVisible && error == null) rootFocusRequester.requestFocus()
+    }
+
+    LaunchedEffect(activeRequest.key, stream?.url, alternateUrl, loading, error) {
+        if (stream == null || alternateUrl != null || !loading || error != null) return@LaunchedEffect
+        delay(DIRECT_SOURCE_TIMEOUT_MS)
+        if (alternateSources.isEmpty() && loading && error == null) {
+            Log.w("NCinqPlayer", "Direct source did not become playable; trying alternate servers")
+            saveProgress()
+            startAlternatePlayback()
+        }
+    }
+
+    LaunchedEffect(activeAlternateSource?.id, alternateSourceHealthy, error) {
+        val source = activeAlternateSource ?: return@LaunchedEffect
+        if (alternateSourceHealthy || error != null) return@LaunchedEffect
+        delay(ALTERNATE_SOURCE_TIMEOUT_MS)
+        if (
+            alternateSources.getOrNull(alternateSourceIndex)?.id == source.id &&
+            !alternateSourceHealthy &&
+            error == null
+        ) {
+            advanceAlternateSource()
+        }
     }
 
     Box(
@@ -446,7 +580,6 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             .focusRequester(rootFocusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (alternateUrl != null) return@onPreviewKeyEvent false
                 val native = event.nativeKeyEvent
                 if (native.action != KeyEvent.ACTION_DOWN || native.repeatCount > 0) return@onPreviewKeyEvent false
                 when (native.keyCode) {
@@ -460,13 +593,11 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                         }
                     }
                     KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                        player.play()
-                        showControls()
+                        playPlayback()
                         true
                     }
                     KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                        player.pause()
-                        showControls()
+                        pausePlayback()
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT,
@@ -492,10 +623,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     }
                     KeyEvent.KEYCODE_CAPTIONS,
                     KeyEvent.KEYCODE_MENU -> {
-                        if (captionTracks.isNotEmpty()) {
-                            subtitleMenuVisible = true
-                            showControls()
-                        }
+                        if (captionTracks.isNotEmpty() || alternateCaptionsAvailable) toggleCaptions()
                         true
                     }
                     else -> false
@@ -516,26 +644,87 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
         )
 
-        alternateUrl?.let { FallbackWebPlayer(it) }
+        activeAlternateSource?.let { source ->
+            key(source.id) {
+                FallbackWebPlayer(
+                    url = source.url,
+                    onWebViewReady = {
+                        if (alternateSources.getOrNull(alternateSourceIndex)?.id == source.id) {
+                            alternateWebView = it
+                            alternateSwitchInFlight = false
+                            rootFocusRequester.requestFocus()
+                        }
+                    },
+                    onPlaybackState = playbackState@ { state ->
+                        if (alternateSources.getOrNull(alternateSourceIndex)?.id != source.id) {
+                            return@playbackState
+                        }
+                        if (state.failed) {
+                            advanceAlternateSource()
+                            return@playbackState
+                        }
+                        positionMs = state.positionMs
+                        durationMs = state.durationMs
+                        isPlaying = state.isPlaying
+                        captionsEnabled = state.captionsEnabled
+                        alternateCaptionsAvailable = state.captionsAvailable
+                        if (state.playable && !alternateSourceHealthy) {
+                            alternateSourceHealthy = true
+                            loading = false
+                            showControls()
+                        }
+                        if (state.ready && !alternateResumeApplied) {
+                            alternateResumeApplied = true
+                            val savedPosition = viewModel.resumePosition(activeRequest)
+                            if (savedPosition > 30_000L) {
+                                alternateWebView?.seekAlternateTo(savedPosition)
+                            }
+                        }
+                        if (state.ended && !finished) {
+                            finished = true
+                            saveProgress(completed = true)
+                            showControls()
+                        }
+                    },
+                    onWebViewDisposed = { disposedWebView ->
+                        if (alternateWebView === disposedWebView) alternateWebView = null
+                    },
+                    onMainFrameFailure = {
+                        if (alternateSources.getOrNull(alternateSourceIndex)?.id == source.id) {
+                            advanceAlternateSource()
+                        }
+                    },
+                )
+            }
+        }
 
-        if (alternateUrl == null && controlsVisible && error == null && !loading) {
+        if (controlsVisible && error == null && !loading) {
             PlayerChrome(
                 request = activeRequest,
-                provider = stream?.provider,
+                provider = activeAlternateSource?.let { source ->
+                    val number = alternateSourceIndex + 1
+                    if (alternateSourceHealthy) {
+                        "${source.name} · server $number/${alternateSources.size}"
+                    } else {
+                        "Checking ${source.name} · server $number/${alternateSources.size}"
+                    }
+                } ?: stream?.provider,
                 isPlaying = isPlaying,
                 positionMs = positionMs,
                 durationMs = durationMs,
-                captionsAvailable = captionTracks.isNotEmpty(),
+                captionsAvailable = captionTracks.isNotEmpty() || alternateCaptionsAvailable,
                 captionsEnabled = captionsEnabled,
                 playFocusRequester = controlFocusRequester,
                 onPlayPause = ::togglePlayback,
                 onSeek = ::seekBy,
-                onCaptions = {
-                    subtitleMenuVisible = true
-                    showControls()
-                },
+                onCaptions = ::toggleCaptions,
                 onPreviousEpisode = { switchEpisode(next = false) },
                 onNextEpisode = { switchEpisode(next = true) },
+                onNextServer = if (activeAlternateSource != null && alternateSources.size > 1) {
+                    ::advanceAlternateSource
+                } else {
+                    null
+                },
             )
         }
 
@@ -579,10 +768,26 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     CircularProgressIndicator(color = BrandBright)
                     Text(
-                        if (transitionInFlight) "Loading next episode" else if (automaticRetries > 0) "Restoring playback" else "Preparing stream",
+                        activeAlternateSource?.let { source ->
+                            "Checking ${source.name} · server ${alternateSourceIndex + 1} of ${alternateSources.size}"
+                        } ?: if (transitionInFlight) {
+                            "Loading next episode"
+                        } else if (automaticRetries > 0) {
+                            "Restoring playback"
+                        } else {
+                            "Preparing stream"
+                        },
                         color = TextPrimary,
                         fontSize = 16.sp,
                     )
+                    if (activeAlternateSource != null && alternateSources.size > 1) {
+                        FocusButton(
+                            "Try next server",
+                            onClick = ::advanceAlternateSource,
+                            modifier = Modifier.focusRequester(controlFocusRequester),
+                            selected = true,
+                        )
+                    }
                 }
             }
         }
@@ -599,9 +804,7 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                             FocusButton(
                                 "Use alternate server",
                                 onClick = {
-                                    error = null
-                                    controlsVisible = false
-                                    alternateUrl = activeRequest.alternateEmbedUrl()
+                                    startAlternatePlayback()
                                 },
                                 modifier = Modifier.focusRequester(retryFocusRequester),
                                 selected = true,
@@ -715,6 +918,7 @@ private fun PlayerChrome(
     onCaptions: () -> Unit,
     onPreviousEpisode: () -> Unit,
     onNextEpisode: () -> Unit,
+    onNextServer: (() -> Unit)?,
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
         Column(
@@ -757,6 +961,10 @@ private fun PlayerChrome(
                 if (request.mediaType == MediaType.TV) {
                     Spacer(Modifier.width(24.dp))
                     PlayerControl(Icons.Rounded.SkipNext, "Next", onNextEpisode)
+                }
+                onNextServer?.let { nextServer ->
+                    Spacer(Modifier.width(32.dp))
+                    PlayerControl(Icons.Rounded.SwapHoriz, "Next server", nextServer)
                 }
                 if (captionsAvailable) {
                     Spacer(Modifier.width(40.dp))
@@ -887,14 +1095,65 @@ private val MOVIES_REQUIRING_ALTERNATE_SERVER = setOf(
 internal fun PlaybackRequest.requiresAlternateServer(): Boolean =
     mediaType == MediaType.MOVIE && mediaId in MOVIES_REQUIRING_ALTERNATE_SERVER
 
-private fun PlaybackRequest.alternateEmbedUrl(): String = when (mediaType) {
-    MediaType.MOVIE -> "https://vidlink.pro/movie/$mediaId?autoplay=true"
-    MediaType.TV -> "https://vidlink.pro/tv/$mediaId/${season ?: 1}/${episode ?: 1}?autoplay=true"
+internal data class AlternateStreamSource(
+    val id: String,
+    val name: String,
+    val url: String,
+)
+
+internal fun PlaybackRequest.alternateStreamSources(): List<AlternateStreamSource> {
+    val seasonNumber = season ?: 1
+    val episodeNumber = episode ?: 1
+    val vidSrcPath = when (mediaType) {
+        MediaType.MOVIE -> "movie/$mediaId"
+        MediaType.TV -> "tv/$mediaId/$seasonNumber/$episodeNumber"
+    }
+    val vidLinkPath = when (mediaType) {
+        MediaType.MOVIE -> "movie/$mediaId"
+        MediaType.TV -> "tv/$mediaId/$seasonNumber/$episodeNumber"
+    }
+    val embedPath = when (mediaType) {
+        MediaType.MOVIE -> "movie/$mediaId"
+        MediaType.TV -> "tv/$mediaId/$seasonNumber/$episodeNumber"
+    }
+    return listOf(
+        AlternateStreamSource(
+            id = "vidsrc",
+            name = "VidSrc",
+            url = "https://vidsrc.ru/$vidSrcPath?autoplay=true",
+        ),
+        AlternateStreamSource(
+            id = "vidlink",
+            name = "VidLink",
+            url = "https://vidlink.pro/$vidLinkPath?autoplay=true",
+        ),
+        AlternateStreamSource(
+            id = "vidfast",
+            name = "VidFast",
+            url = "https://vidfast.vc/$vidLinkPath?autoPlay=true",
+        ),
+        AlternateStreamSource(
+            id = "vidapi",
+            name = "VidAPI",
+            url = "https://vaplayer.ru/embed/$embedPath?autoplay=true",
+        ),
+        AlternateStreamSource(
+            id = "vidcore",
+            name = "VidCore",
+            url = "https://www.vidcore.org/embed/$embedPath?autoPlay=true",
+        ),
+    )
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun FallbackWebPlayer(url: String) {
+private fun FallbackWebPlayer(
+    url: String,
+    onWebViewReady: (WebView) -> Unit,
+    onPlaybackState: (AlternatePlaybackState) -> Unit,
+    onWebViewDisposed: (WebView) -> Unit,
+    onMainFrameFailure: () -> Unit,
+) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     AndroidView(
         factory = { context ->
@@ -903,24 +1162,361 @@ private fun FallbackWebPlayer(url: String) {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
-                webViewClient = WebViewClient()
+                settings.setSupportMultipleWindows(false)
+                settings.javaScriptCanOpenWindowsAutomatically = false
+                webViewClient = object : WebViewClient() {
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        error: WebResourceError,
+                    ) {
+                        if (request.isForMainFrame) view.post { onMainFrameFailure() }
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        errorResponse: WebResourceResponse,
+                    ) {
+                        if (request.isForMainFrame && errorResponse.statusCode >= 400) {
+                            view.post { onMainFrameFailure() }
+                        }
+                    }
+                }
                 webChromeClient = WebChromeClient()
-                isFocusable = true
-                isFocusableInTouchMode = true
+                isFocusable = false
+                isFocusableInTouchMode = false
+                keepScreenOn = true
                 loadUrl(url)
-                requestFocus()
                 webView = this
+                onWebViewReady(this)
             }
         },
         update = { if (it.url != url) it.loadUrl(url) },
         modifier = Modifier.fillMaxSize(),
     )
-    DisposableEffect(url) {
-        onDispose {
-            webView?.stopLoading()
-            webView?.destroy()
+    LaunchedEffect(webView, url) {
+        val activeWebView = webView ?: return@LaunchedEffect
+        while (isActive) {
+            activeWebView.evaluateJavascript(ALTERNATE_PLAYER_STATE_SCRIPT) { result ->
+                parseAlternatePlaybackState(result)?.let(onPlaybackState)
+            }
+            delay(500)
         }
     }
+    DisposableEffect(url) {
+        onDispose {
+            webView?.let { disposedWebView ->
+                onWebViewDisposed(disposedWebView)
+                disposedWebView.stopLoading()
+                disposedWebView.destroy()
+            }
+        }
+    }
+}
+
+internal data class AlternatePlaybackState(
+    val positionMs: Long,
+    val durationMs: Long,
+    val isPlaying: Boolean,
+    val ready: Boolean,
+    val ended: Boolean,
+    val captionsAvailable: Boolean,
+    val captionsEnabled: Boolean,
+    val playable: Boolean,
+    val failed: Boolean,
+)
+
+internal fun parseAlternatePlaybackState(raw: String?): AlternatePlaybackState? {
+    val values = raw
+        ?.trim()
+        ?.takeUnless { it == "null" }
+        ?.removeSurrounding("\"")
+        ?.split('|')
+        ?: return null
+    if (values.size != 9) return null
+    val positionMs = values[0].toLongOrNull()?.coerceAtLeast(0L) ?: return null
+    val durationMs = values[1].toLongOrNull()?.coerceAtLeast(0L) ?: return null
+    val playing = values[2].toIntOrNull() ?: return null
+    val readyState = values[3].toIntOrNull() ?: return null
+    val ended = values[4].toIntOrNull() ?: return null
+    val captionsAvailable = values[5].toIntOrNull() ?: return null
+    val captionsEnabled = values[6].toIntOrNull() ?: return null
+    val playable = values[7].toIntOrNull() ?: return null
+    val failed = values[8].toIntOrNull() ?: return null
+    return AlternatePlaybackState(
+        positionMs = positionMs,
+        durationMs = durationMs,
+        isPlaying = playing == 1,
+        ready = readyState >= 1 && durationMs > 0,
+        ended = ended == 1,
+        captionsAvailable = captionsAvailable == 1,
+        captionsEnabled = captionsEnabled == 1,
+        playable = playable == 1,
+        failed = failed == 1,
+    )
+}
+
+private val ALTERNATE_PLAYER_STATE_SCRIPT = """
+    (function() {
+        function finiteNumber() {
+            for (var i = 0; i < arguments.length; i++) {
+                if (arguments[i] === null || arguments[i] === undefined || arguments[i] === '') continue;
+                var value = Number(arguments[i]);
+                if (Number.isFinite(value) && value >= 0) return value;
+            }
+            return 0;
+        }
+        function milliseconds(value) {
+            return value > 100000 ? Math.round(value) : Math.round(value * 1000);
+        }
+        function findVideo(view) {
+            try {
+                var videos = Array.prototype.slice.call(view.document.querySelectorAll('video'));
+                if (videos.length) {
+                    videos.sort(function(a, b) {
+                        var aScore = (Number.isFinite(a.duration) ? a.duration : 0) + (a.readyState || 0);
+                        var bScore = (Number.isFinite(b.duration) ? b.duration : 0) + (b.readyState || 0);
+                        return bScore - aScore;
+                    });
+                    return videos[0];
+                }
+                for (var i = 0; i < view.frames.length; i++) {
+                    var nestedVideo = findVideo(view.frames[i]);
+                    if (nestedVideo) return nestedVideo;
+                }
+            } catch (_) {}
+            return null;
+        }
+        if (!window.__ncinqBridgeInstalled) {
+            window.__ncinqBridgeInstalled = true;
+            window.__ncinqMessageState = null;
+            window.addEventListener('message', function(event) {
+                var message = event.data;
+                if (typeof message === 'string') {
+                    try { message = JSON.parse(message); } catch (_) { return; }
+                }
+                if (!message || typeof message !== 'object') return;
+                var payload = message.data && typeof message.data === 'object' ? message.data : message;
+                var progress = payload.progress && typeof payload.progress === 'object' ? payload.progress : {};
+                var duration = finiteNumber(
+                    payload.duration,
+                    payload.totalDuration,
+                    progress.duration,
+                    progress.total,
+                    message.duration
+                );
+                var currentTime = finiteNumber(
+                    payload.currentTime,
+                    payload.position,
+                    progress.currentTime,
+                    progress.watchedTime,
+                    progress.position,
+                    message.currentTime
+                );
+                var eventName = String(
+                    payload.event || payload.status || message.event || message.status || ''
+                ).toLowerCase();
+                if (duration > 0) {
+                    window.__ncinqMessageState = {
+                        positionMs: milliseconds(currentTime),
+                        durationMs: milliseconds(duration),
+                        isPlaying: eventName.indexOf('pause') < 0 && eventName.indexOf('ended') < 0,
+                        ended: eventName.indexOf('ended') >= 0,
+                        updatedAt: Date.now()
+                    };
+                }
+            });
+        }
+        var bodyText = '';
+        try {
+            bodyText = ((document.body && document.body.innerText) || '').toLowerCase().slice(0, 8000);
+        } catch (_) {}
+        var failurePhrases = [
+            "couldn't find this content",
+            'could not find this content',
+            'content not found',
+            'no sources available',
+            'no source available',
+            'video not found',
+            'media not found',
+            'failed to load video',
+            'playback unavailable',
+            'playback restricted',
+            'bad gateway',
+            'internal server error',
+            'error 404',
+            'error 500'
+        ];
+        var explicitFailure = failurePhrases.some(function(phrase) {
+            return bodyText.indexOf(phrase) >= 0;
+        });
+        var video = findVideo(window);
+        if (!video) {
+            var cached = window.__ncinqMessageState;
+            if (cached && Date.now() - cached.updatedAt < 15000 && cached.durationMs > 0) {
+                return [
+                    cached.positionMs,
+                    cached.durationMs,
+                    cached.isPlaying ? 1 : 0,
+                    1,
+                    cached.ended ? 1 : 0,
+                    0,
+                    0,
+                    1,
+                    0
+                ].join('|');
+            }
+            return ['0', '0', '0', '0', '0', '0', '0', '0', explicitFailure ? '1' : '0'].join('|');
+        }
+        var tracks = Array.prototype.slice.call(video.textTracks || []);
+        var englishTracks = tracks.filter(function(track) {
+            var name = ((track.language || '') + ' ' + (track.label || '')).toLowerCase();
+            return name === 'en' || name.indexOf('english') >= 0 || name.indexOf('en-') >= 0;
+        });
+        var duration = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0;
+        var playable = duration > 0 && video.readyState >= 1 && !video.error;
+        var failed = !playable && (explicitFailure || !!video.error);
+        return [
+            Math.round((video.currentTime || 0) * 1000),
+            duration,
+            !video.paused && !video.ended ? 1 : 0,
+            video.readyState || 0,
+            video.ended ? 1 : 0,
+            englishTracks.length > 0 ? 1 : 0,
+            englishTracks.some(function(track) { return track.mode === 'showing'; }) ? 1 : 0,
+            playable ? 1 : 0,
+            failed ? 1 : 0
+        ].join('|');
+    })()
+""".trimIndent()
+
+private val FIND_ALTERNATE_VIDEO_SCRIPT = """
+    function findVideo(view) {
+        try {
+            var videos = Array.prototype.slice.call(view.document.querySelectorAll('video'));
+            if (videos.length) {
+                videos.sort(function(a, b) {
+                    var aScore = (Number.isFinite(a.duration) ? a.duration : 0) + (a.readyState || 0);
+                    var bScore = (Number.isFinite(b.duration) ? b.duration : 0) + (b.readyState || 0);
+                    return bScore - aScore;
+                });
+                return videos[0];
+            }
+            for (var i = 0; i < view.frames.length; i++) {
+                var nestedVideo = findVideo(view.frames[i]);
+                if (nestedVideo) return nestedVideo;
+            }
+        } catch (_) {}
+        return null;
+    }
+    var video = findVideo(window);
+""".trimIndent()
+
+private fun WebView.runAlternateCommand(
+    commandName: String,
+    localCommand: String,
+    value: Double? = null,
+) {
+    val valueLiteral = value?.toString() ?: "null"
+    evaluateJavascript(
+        """
+        (function() {
+            $FIND_ALTERNATE_VIDEO_SCRIPT
+            if (video) {
+                $localCommand
+                return true;
+            }
+            var message = {
+                type: 'PLAYER_COMMAND',
+                data: { command: '$commandName', value: $valueLiteral }
+            };
+            var sent = false;
+            function notifyFrames(view) {
+                try {
+                    var frames = view.document.querySelectorAll('iframe');
+                    Array.prototype.forEach.call(frames, function(frame) {
+                        if (!frame.contentWindow) return;
+                        frame.contentWindow.postMessage(message, '*');
+                        frame.contentWindow.postMessage(message.data, '*');
+                        sent = true;
+                        try { notifyFrames(frame.contentWindow); } catch (_) {}
+                    });
+                } catch (_) {}
+            }
+            notifyFrames(window);
+            return sent;
+        })()
+        """.trimIndent(),
+        null,
+    )
+}
+
+private fun WebView.toggleAlternatePlayback() {
+    runAlternateCommand(
+        commandName = "toggle",
+        localCommand = """
+            if (video.paused) {
+                var playResult = video.play();
+                if (playResult && playResult.catch) playResult.catch(function() {});
+            } else {
+                video.pause();
+            }
+        """.trimIndent(),
+    )
+}
+
+private fun WebView.playAlternate() {
+    runAlternateCommand(
+        commandName = "play",
+        localCommand = """
+            var playResult = video.play();
+            if (playResult && playResult.catch) playResult.catch(function() {});
+        """.trimIndent(),
+    )
+}
+
+private fun WebView.pauseAlternate() {
+    runAlternateCommand(commandName = "pause", localCommand = "video.pause();")
+}
+
+private fun WebView.seekAlternateBy(offsetMs: Long) {
+    val offsetSeconds = offsetMs / 1_000.0
+    runAlternateCommand(
+        commandName = "seekBy",
+        value = offsetSeconds,
+        localCommand = """
+            var end = Number.isFinite(video.duration) ? video.duration : Number.MAX_SAFE_INTEGER;
+            video.currentTime = Math.max(0, Math.min(end, video.currentTime + $offsetSeconds));
+        """.trimIndent(),
+    )
+}
+
+private fun WebView.seekAlternateTo(positionMs: Long) {
+    val positionSeconds = positionMs.coerceAtLeast(0L) / 1_000.0
+    runAlternateCommand(
+        commandName = "seek",
+        value = positionSeconds,
+        localCommand = "video.currentTime = $positionSeconds;",
+    )
+}
+
+private fun WebView.toggleAlternateEnglishCaptions() {
+    runAlternateCommand(
+        commandName = "toggleCaptions",
+        localCommand = """
+            var tracks = Array.prototype.slice.call(video.textTracks || []);
+            var englishTracks = tracks.filter(function(track) {
+                var name = ((track.language || '') + ' ' + (track.label || '')).toLowerCase();
+                return name === 'en' || name.indexOf('english') >= 0 || name.indexOf('en-') >= 0;
+            });
+            if (englishTracks.length) {
+                var enable = !englishTracks.some(function(track) { return track.mode === 'showing'; });
+                tracks.forEach(function(track) { track.mode = 'disabled'; });
+                if (enable) englishTracks[0].mode = 'showing';
+            }
+        """.trimIndent(),
+    )
 }
 
 internal fun formatTime(timeMs: Long): String {
