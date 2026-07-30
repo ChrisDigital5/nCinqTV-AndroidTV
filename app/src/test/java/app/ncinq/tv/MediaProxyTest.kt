@@ -10,14 +10,13 @@ import org.junit.Test
 class MediaProxyTest {
     @Test
     fun `signed stream URLs keep headers and proxy authorization`() {
-        val url = MediaProxy.streamUrl(
-            StreamResult(
-                url = "https://rotating.example/video/master.m3u8",
-                type = "hls",
-                headers = mapOf("Referer" to "https://provider.example"),
-                proxyToken = "signed-token",
-            )
+        val stream = StreamResult(
+            url = "https://rotating.example/video/master.m3u8",
+            type = "hls",
+            headers = mapOf("Referer" to "https://provider.example"),
+            proxyToken = "signed-token",
         )
+        val url = MediaProxy.playbackUrl(stream)
 
         assertTrue(url.startsWith("https://tv.ncinq.app/api/cors-proxy?"))
         assertTrue(url.contains("signed-token"))
@@ -26,8 +25,10 @@ class MediaProxyTest {
 
     @Test
     fun `unsigned streams do not invent authorization`() {
-        val url = MediaProxy.streamUrl(StreamResult(url = "https://media.example/video.mp4", type = "mp4"))
-        assertFalse(url.contains("token="))
+        val stream = StreamResult(url = "https://media.example/video.mp4", type = "mp4")
+
+        assertEquals(stream.url, MediaProxy.playbackUrl(stream))
+        assertFalse(MediaProxy.streamUrl(stream).contains("token="))
     }
 
     @Test

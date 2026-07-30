@@ -87,6 +87,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Text
 import app.ncinq.tv.AppViewModel
+import app.ncinq.tv.data.MediaProxy
 import app.ncinq.tv.data.MediaType
 import app.ncinq.tv.data.PlaybackRequest
 import app.ncinq.tv.data.StreamResult
@@ -100,12 +101,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import java.io.IOException
 import kotlin.math.max
 
 private const val SEEK_INCREMENT_MS = 10_000L
 private const val CONTROLS_TIMEOUT_MS = 4_500L
 private const val MAX_AUTOMATIC_RETRIES = 3
-private const val DIRECT_SOURCE_TIMEOUT_MS = 30_000L
+private const val MAX_RESOLVER_ATTEMPTS = 2
 private const val ALTERNATE_SOURCE_TIMEOUT_MS = 15_000L
 
 @OptIn(UnstableApi::class)
@@ -376,9 +378,10 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                         loading = false
                         durationMs = player.duration.coerceAtLeast(0L)
                         if (hasRuntimeMismatch(activeRequest.expectedRuntimeMinutes, durationMs)) {
+                            playbackFailure = PlaybackFailureKind.RUNTIME_MISMATCH
+                            error = "This server returned the wrong episode (${formatTime(durationMs)} instead of about ${activeRequest.expectedRuntimeMinutes} min)."
                             saveProgress()
                             player.pause()
-                            startAlternatePlayback()
                         }
                         if (wasPreparing) showControls()
                     }
@@ -424,9 +427,10 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                 }
                 loading = false
                 controlsVisible = true
+                playbackFailure = PlaybackFailureKind.MEDIA_SOURCE
+                error = playbackError.friendlyMessage(statusCode)
                 Log.e("NCinqPlayer", "Playback failed", playbackError)
                 saveProgress()
-                startAlternatePlayback()
             }
         }
         player.addListener(listener)
@@ -458,40 +462,62 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         player.stop()
         player.clearMediaItems()
 
-        if (activeRequest.requiresAlternateServer()) {
-            startAlternatePlayback()
+        var resolved: StreamResult? = null
+        var resolveFailure: Throwable? = null
+        for (attempt in 0 until MAX_RESOLVER_ATTEMPTS) {
+            try {
+                resolved = viewModel.resolveStream(
+                    activeRequest,
+                    force = reloadKey > 0 || attempt > 0,
+                )
+                break
+            } catch (failure: Throwable) {
+                resolveFailure = failure
+                val statusCode = (failure as? HttpException)?.code()
+                if (attempt + 1 >= MAX_RESOLVER_ATTEMPTS ||
+                    !failure.isRecoverableResolverFailure(statusCode)
+                ) {
+                    break
+                }
+                Log.w(
+                    "NCinqPlayer",
+                    "Direct resolver failed; retrying direct source (attempt ${attempt + 2})",
+                    failure,
+                )
+                delay((attempt + 1) * 750L)
+            }
+        }
+
+        if (resolved == null) {
+            loading = false
+            controlsVisible = true
+            playbackFailure = PlaybackFailureKind.RESOLVER
+            error = resolverFailureMessage(
+                (resolveFailure as? HttpException)?.code(),
+                resolveFailure?.message,
+            )
             return@LaunchedEffect
         }
 
-        runCatching {
-            viewModel.resolveStream(activeRequest, force = reloadKey > 0)
-        }.onSuccess { resolved ->
-            stream = resolved
-            httpDataSourceFactory.setDefaultRequestProperties(resolved.headers)
-            val captions = resolved.captions.flatMap { caption ->
-                runCatching {
-                    captionResolver.resolve(context, caption, activeRequest.expectedRuntimeMinutes)
-                }.getOrDefault(emptyList())
-            }.distinctBy { it.trackId }
-            captionTracks = captions
-            selectedCaptionId = captions.firstOrNull()?.trackId
-            captionsEnabled = captions.isNotEmpty()
-            player.setMediaItem(resolved.toMediaItem(captions))
-            val savedPosition = viewModel.resumePosition(activeRequest)
-            val resumeAt = max(savedPosition, retryPositionMs)
-            if (resumeAt > 30_000) player.seekTo(resumeAt)
-            retryPositionMs = 0L
-            player.prepare()
-            player.play()
-        }.onFailure { failure ->
-            Log.w(
-                "NCinqPlayer",
-                "Direct resolver failed; trying alternate servers: " +
-                    resolverFailureMessage((failure as? HttpException)?.code(), failure.message),
-                failure,
-            )
-            startAlternatePlayback()
-        }
+        stream = resolved
+        httpDataSourceFactory.setDefaultRequestProperties(
+            if (resolved.proxyToken.isNullOrBlank()) resolved.headers else emptyMap(),
+        )
+        val captions = resolved.captions.flatMap { caption ->
+            runCatching {
+                captionResolver.resolve(context, caption, activeRequest.expectedRuntimeMinutes)
+            }.getOrDefault(emptyList())
+        }.distinctBy { it.trackId }
+        captionTracks = captions
+        selectedCaptionId = captions.firstOrNull()?.trackId
+        captionsEnabled = captions.isNotEmpty()
+        player.setMediaItem(resolved.toMediaItem(captions))
+        val savedPosition = viewModel.resumePosition(activeRequest)
+        val resumeAt = max(savedPosition, retryPositionMs)
+        if (resumeAt > 30_000) player.seekTo(resumeAt)
+        retryPositionMs = 0L
+        player.prepare()
+        player.play()
     }
 
     LaunchedEffect(activeRequest.key) {
@@ -548,16 +574,6 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
             controlFocusRequester.requestFocus()
         }
         else if (!controlsVisible && error == null) rootFocusRequester.requestFocus()
-    }
-
-    LaunchedEffect(activeRequest.key, stream?.url, alternateUrl, loading, error) {
-        if (stream == null || alternateUrl != null || !loading || error != null) return@LaunchedEffect
-        delay(DIRECT_SOURCE_TIMEOUT_MS)
-        if (alternateSources.isEmpty() && loading && error == null) {
-            Log.w("NCinqPlayer", "Direct source did not become playable; trying alternate servers")
-            saveProgress()
-            startAlternatePlayback()
-        }
     }
 
     LaunchedEffect(activeAlternateSource?.id, alternateSourceHealthy, error) {
@@ -800,26 +816,21 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
                     Spacer(Modifier.height(6.dp))
                     val recoveryActions = playbackFailure?.let(::recoveryActionsFor).orEmpty()
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FocusButton(
+                            "Try direct again",
+                            onClick = ::retryPlayback,
+                            modifier = Modifier.focusRequester(retryFocusRequester),
+                            selected = true,
+                        )
                         if (PlaybackRecoveryAction.ALTERNATE_SERVER in recoveryActions) {
                             FocusButton(
-                                "Use alternate server",
+                                "Try alternate servers",
                                 onClick = {
                                     startAlternatePlayback()
                                 },
-                                modifier = Modifier.focusRequester(retryFocusRequester),
-                                selected = true,
+                                selected = false,
                             )
                         }
-                        FocusButton(
-                            "Try again",
-                            onClick = ::retryPlayback,
-                            modifier = if (PlaybackRecoveryAction.ALTERNATE_SERVER in recoveryActions) {
-                                Modifier
-                            } else {
-                                Modifier.focusRequester(retryFocusRequester)
-                            },
-                            selected = PlaybackRecoveryAction.ALTERNATE_SERVER !in recoveryActions,
-                        )
                         FocusButton("Back to details", onClick = onBack)
                     }
                 }
@@ -1087,13 +1098,13 @@ internal fun resolverFailureMessage(statusCode: Int?, detail: String?): String =
     else -> "No direct stream is currently available. Try again or use alternate server."
 }
 
-private val MOVIES_REQUIRING_ALTERNATE_SERVER = setOf(
-    390043, // The Hitman's Bodyguard
-    522931, // Hitman's Wife's Bodyguard
-)
-
-internal fun PlaybackRequest.requiresAlternateServer(): Boolean =
-    mediaType == MediaType.MOVIE && mediaId in MOVIES_REQUIRING_ALTERNATE_SERVER
+internal fun Throwable.isRecoverableResolverFailure(statusCode: Int?): Boolean {
+    val detail = message.orEmpty()
+    return this is IOException ||
+        statusCode in 500..599 ||
+        detail.contains("timed out", ignoreCase = true) ||
+        detail.contains("temporarily unavailable", ignoreCase = true)
+}
 
 internal data class AlternateStreamSource(
     val id: String,
@@ -1567,7 +1578,7 @@ private fun StreamResult.toMediaItem(resolvedCaptions: List<ResolvedCaption>): M
             .build()
     }
     return MediaItem.Builder()
-        .setUri(Uri.parse(url))
+        .setUri(Uri.parse(MediaProxy.playbackUrl(this)))
         .setMimeType(if (type.equals("hls", ignoreCase = true)) MimeTypes.APPLICATION_M3U8 else MimeTypes.VIDEO_MP4)
         .setSubtitleConfigurations(subtitles)
         .build()

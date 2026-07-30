@@ -19,8 +19,8 @@ android {
         applicationId = "app.ncinq.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 10413
-        versionName = "1.4.13"
+        versionCode = 10414
+        versionName = "1.4.14"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

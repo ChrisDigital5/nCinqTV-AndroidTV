@@ -111,6 +111,10 @@ class CatalogRepository(private val api: NCinqApi = ApiClient.service) {
 }
 
 object MediaProxy {
+    fun playbackUrl(stream: StreamResult): String {
+        return if (stream.proxyToken.isNullOrBlank()) stream.url else streamUrl(stream)
+    }
+
     fun streamUrl(stream: StreamResult): String {
         val builder = "${API_BASE_URL}api/cors-proxy".toHttpUrl().newBuilder()
             .addQueryParameter("url", stream.url)

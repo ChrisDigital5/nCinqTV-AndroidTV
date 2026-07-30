@@ -50,28 +50,10 @@ class PlayerRecoveryTest {
     }
 
     @Test
-    fun `both Hitmans Bodyguard movies bypass their broken direct routes`() {
-        assertTrue(
-            PlaybackRequest(
-                mediaId = 390043,
-                mediaType = MediaType.MOVIE,
-                title = "The Hitman's Bodyguard",
-            ).requiresAlternateServer(),
-        )
-        assertTrue(
-            PlaybackRequest(
-                mediaId = 522931,
-                mediaType = MediaType.MOVIE,
-                title = "Hitman's Wife's Bodyguard",
-            ).requiresAlternateServer(),
-        )
-        assertFalse(
-            PlaybackRequest(
-                mediaId = 390043,
-                mediaType = MediaType.TV,
-                title = "Unrelated show",
-            ).requiresAlternateServer(),
-        )
+    fun `transient resolver failures retry direct instead of selecting embeds`() {
+        assertTrue(IllegalStateException("Direct stream resolution timed out").isRecoverableResolverFailure(null))
+        assertTrue(IllegalStateException("temporary").isRecoverableResolverFailure(502))
+        assertFalse(IllegalArgumentException("No source exists").isRecoverableResolverFailure(null))
     }
 
     @Test
