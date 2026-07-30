@@ -1,6 +1,8 @@
 package app.ncinq.tv.player
 
 import androidx.media3.common.PlaybackException
+import app.ncinq.tv.data.MediaType
+import app.ncinq.tv.data.PlaybackRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -42,6 +44,31 @@ class PlayerRecoveryTest {
         assertEquals(
             "Direct server returned HTTP 500. Try again or use alternate server.",
             resolverFailureMessage(500, "HTTP 500"),
+        )
+    }
+
+    @Test
+    fun `both Hitmans Bodyguard movies bypass their broken direct routes`() {
+        assertTrue(
+            PlaybackRequest(
+                mediaId = 390043,
+                mediaType = MediaType.MOVIE,
+                title = "The Hitman's Bodyguard",
+            ).requiresAlternateServer(),
+        )
+        assertTrue(
+            PlaybackRequest(
+                mediaId = 522931,
+                mediaType = MediaType.MOVIE,
+                title = "Hitman's Wife's Bodyguard",
+            ).requiresAlternateServer(),
+        )
+        assertFalse(
+            PlaybackRequest(
+                mediaId = 390043,
+                mediaType = MediaType.TV,
+                title = "Unrelated show",
+            ).requiresAlternateServer(),
         )
     }
 }

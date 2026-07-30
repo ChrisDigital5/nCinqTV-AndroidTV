@@ -352,6 +352,13 @@ fun PlayerScreen(viewModel: AppViewModel, onBack: () -> Unit) {
         player.stop()
         player.clearMediaItems()
 
+        if (activeRequest.requiresAlternateServer()) {
+            loading = false
+            controlsVisible = false
+            alternateUrl = activeRequest.alternateEmbedUrl()
+            return@LaunchedEffect
+        }
+
         runCatching {
             viewModel.resolveStream(activeRequest, force = reloadKey > 0)
         }.onSuccess { resolved ->
@@ -871,6 +878,14 @@ internal fun resolverFailureMessage(statusCode: Int?, detail: String?): String =
     !detail.isNullOrBlank() -> "$detail Try again or use alternate server."
     else -> "No direct stream is currently available. Try again or use alternate server."
 }
+
+private val MOVIES_REQUIRING_ALTERNATE_SERVER = setOf(
+    390043, // The Hitman's Bodyguard
+    522931, // Hitman's Wife's Bodyguard
+)
+
+internal fun PlaybackRequest.requiresAlternateServer(): Boolean =
+    mediaType == MediaType.MOVIE && mediaId in MOVIES_REQUIRING_ALTERNATE_SERVER
 
 private fun PlaybackRequest.alternateEmbedUrl(): String = when (mediaType) {
     MediaType.MOVIE -> "https://vidlink.pro/movie/$mediaId?autoplay=true"
